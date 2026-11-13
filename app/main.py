@@ -1,30 +1,27 @@
 """AgentGate HTTP server: agent API, human API, discovery file, demo endpoints and web UI."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import agent, core
+from . import agent, config, core, llm
 
-ROOT = Path(__file__).resolve().parent.parent
-WEB_DIR = ROOT / "web"
+WEB_DIR = config.ROOT / "web"
 
 app = FastAPI(
     title="AgentGate - Valio Aimo front door for purchasing agents",
-    version="0.1.0",
-    description="Open interface through which external purchasing agents can search, quote and order "
-                "within a buyer-issued mandate. The door enforces limits, routes unusual or large orders "
-                "to a human, and keeps a tamper-evident audit log. Spec: docs/AGENT_INTERFACE_SPEC.md",
+    version="0.2.0",
+    description="Open interface through which external purchasing agents look up, quote and order from Valio Aimo "
+                "within a buyer-issued mandate. Static data narrows the search; live price and availability are "
+                "queried only for the shortlist. The door enforces limits, routes unusual, risky or large orders to a "
+                "human, and keeps a tamper-evident audit log. Spec: docs/AGENT_INTERFACE_SPEC.md",
 )
 
 
 @app.exception_handler(core.WholesalerError)
 async def _wholesaler_error(_, exc: core.WholesalerError):
-    status = 403 if isinstance(exc, core.MandateError) else 400
-    return JSONResponse(status_code=status, content={"error": str(exc)})
+    return JSONResponse(status_code=403 if isinstance(exc, core.MandateError) else 400, content={"error": str(exc)})
 
 
 def current_buyer(x_agent_key: str = Header(..., description="Agent key bound to one buyer's mandate")) -> dict:
@@ -38,32 +35,36 @@ def current_buyer(x_agent_key: str = Header(..., description="Agent key bound to
 
 @app.get("/.well-known/agent-interface.json", tags=["discovery"])
 def discovery():
-    """Machine-readable entry point so any agent can find out how to connect."""
     return {
-        "name": "Valio Aimo AgentGate",
-        "version": "0.1.0",
-        "spec": "docs/AGENT_INTERFACE_SPEC.md",
-        "openapi": "/openapi.json",
+        "name": "Valio Aimo AgentGate", "version": "0.2.0",
+        "spec": "docs/AGENT_INTERFACE_SPEC.md", "openapi": "/openapi.json",
         "auth": {"type": "header", "header": "X-Agent-Key",
                  "note": "Each key is bound to one buyer's mandate and can be revoked by the buyer at any time."},
         "transports": {"http": "/api/v1", "mcp": "python -m app.mcp_server (stdio)"},
-        "tools": ["get_my_mandate", "search_products", "check_availability", "request_quote", "place_order", "get_order_status"],
+        "tools": ["get_my_mandate", "smart_lookup", "search_products", "check_availability", "request_quote",
+                  "place_order", "get_order_status"],
+        "lookup_policy": "Narrow down with static product data first; live price/availability only for the shortlist "
+                         "(typically 2 calls for ~8 products), never for the whole catalog.",
         "rules": {
-            "pricing": "fixed contract or list price per buyer, no negotiation",
+            "pricing": "fixed Valio price per customer and date, no negotiation",
             "decisions": ["agent_may_order", "needs_human_approval", "blocked"],
             "human_approval_when": ["total above the mandate's auto-approve limit",
-                                    "quantity unusually high vs. the buyer's normal orders",
-                                    "substitute products"],
-            "blocked_when": ["mandate revoked or expired", "total above hard limit",
-                             "category or lead time outside the mandate"],
+                                    "quantity far above the buyer's usual weekly order",
+                                    "supplier order cutoff passed (delivery not guaranteed)", "substitute products"],
+            "blocked_when": ["mandate revoked or expired", "total above hard limit", "non-food in a food-only mandate",
+                             "lead time beyond the mandate"],
             "every_order_needs": "a human-readable reason",
         },
-        "data_policy": "Agents see only their own buyer's prices and orders; no exact stock levels, "
-                       "no other customers, no internal data. Searches are rate-limited.",
+        "data_policy": "Agents see product data, their own price and availability for the products they ask about; "
+                       "never other customers, margins or internal plans. Searches are rate-limited.",
     }
 
 
 # ---------------------------------------------------------------- agent API (v1)
+
+class LookupRequest(BaseModel):
+    request: str
+
 
 class QuoteItem(BaseModel):
     product_id: str
@@ -86,10 +87,14 @@ def api_mandate(buyer: dict = Depends(current_buyer)):
     return core.public_mandate(buyer)
 
 
+@app.post("/api/v1/lookup", tags=["agent"])
+def api_lookup(body: LookupRequest, buyer: dict = Depends(current_buyer)):
+    return core.smart_lookup(buyer["id"], body.request)
+
+
 @app.get("/api/v1/products", tags=["agent"])
-def api_search(q: str = "", category: str | None = None, label: str | None = None,
-               buyer: dict = Depends(current_buyer)):
-    return core.search_products(buyer["id"], q, category, label)
+def api_search(q: str = "", buyer: dict = Depends(current_buyer)):
+    return core.search_products(buyer["id"], q)
 
 
 @app.get("/api/v1/products/{product_id}/availability", tags=["agent"])
@@ -126,6 +131,12 @@ class MandateChange(BaseModel):
     by: str
 
 
+def _buyer_or_404(buyer_id: str) -> dict:
+    if buyer_id not in core.store.buyers:
+        raise HTTPException(status_code=404, detail="Unknown buyer")
+    return core.store.buyers[buyer_id]
+
+
 @app.get("/api/human/pending", tags=["human"])
 def api_pending():
     return core.pending_orders()
@@ -160,14 +171,21 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class PlanLine(BaseModel):
+    product_id: str
+    units: float
+
+
+class OrderPlanRequest(BaseModel):
+    buyer_id: str
+    lines: list[PlanLine]
+    deliver_by: str
+    reason: str
+    is_substitute: bool = False
+
+
 class BuyerRequest(BaseModel):
     buyer_id: str
-
-
-def _buyer_or_404(buyer_id: str) -> dict:
-    if buyer_id not in core.store.buyers:
-        raise HTTPException(status_code=404, detail="Unknown buyer")
-    return core.store.buyers[buyer_id]
 
 
 @app.get("/api/demo/buyers", tags=["demo"])
@@ -175,10 +193,17 @@ def api_buyers():
     return [core.public_mandate(b) | {"buyer_id": b["id"]} for b in core.store.buyers.values()]
 
 
-@app.post("/api/demo/chat", tags=["demo"])
-def api_chat(body: ChatRequest):
+@app.post("/api/demo/lookup", tags=["demo"])
+def api_demo_lookup(body: ChatRequest):
     _buyer_or_404(body.buyer_id)
-    return agent.run(body.buyer_id, body.message)
+    return agent.lookup(body.buyer_id, body.message)
+
+
+@app.post("/api/demo/order-plan", tags=["demo"])
+def api_order_plan(body: OrderPlanRequest):
+    _buyer_or_404(body.buyer_id)
+    return agent.order_plan(body.buyer_id, [l.model_dump() for l in body.lines], body.deliver_by, body.reason,
+                            body.is_substitute)
 
 
 @app.post("/api/demo/rogue", tags=["demo"])
@@ -195,6 +220,12 @@ def api_orders():
 @app.get("/api/demo/audit", tags=["demo"])
 def api_audit():
     return list(reversed(core.store.audit))
+
+
+@app.get("/api/demo/status", tags=["demo"])
+def api_status():
+    return {"ai_model": config.CLAUDE_MODEL, "ai_available": llm.available(), "ai_usage": llm.usage_totals,
+            "valio_api": core.store.valio.stats, "valio_available": core.store.valio.available}
 
 
 @app.post("/api/demo/reset", tags=["demo"])

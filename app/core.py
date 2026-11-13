@@ -1,12 +1,14 @@
 """AgentGate core: Valio Aimo's front door for external purchasing agents.
 
-Everything an external agent may do goes through this module (exposed over HTTP
-in main.py and over MCP in mcp_server.py). The door - not the agent - enforces:
+Everything an external agent may do goes through this module (HTTP in main.py, MCP in
+mcp_server.py). Static product data comes from Valio's product file; price and availability
+come live from Valio's mock APIs - only for products already narrowed down.
 
-* the buyer's MANDATE: spending limits, allowed categories, validity, revoke switch
-* the UNUSUAL-ORDER GUARD: orders far above the buyer's normal pattern go to a human
-* NEED-TO-KNOW data: each buyer sees only its own contract prices; no exact stock,
-  no other customers, no internal data; bulk scraping is throttled
+The door - not the agent - enforces:
+* the buyer's MANDATE: spending limits, food only, lead time, validity, instant revoke
+* the UNUSUAL-ORDER GUARD: far more than the buyer's normal weekly quantity -> human approval
+* DELIVERY RISK: an order whose cutoff has passed is not committed without a human
+* NEED-TO-KNOW data: no other customers, no internal fields; searches are throttled
 * a TAMPER-EVIDENT audit log (hash chain) and a verifiable receipt per order
 """
 from __future__ import annotations
@@ -17,25 +19,17 @@ import json
 import os
 import threading
 import time
+from collections import defaultdict
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+from . import config
+from .catalog import get_catalog, public_view
+from .valio_api import ValioApiError, client as default_valio
+
 QUOTE_VALID_MINUTES = 30
-ORDER_CUTOFF_HOUR = 14          # orders must be confirmed by 14:00 to ship that day
-SEARCH_LIMIT_PER_MINUTE = 30    # anti-scraping throttle per buyer
-
-# Finnish -> catalog terms, so agents can ask in Finnish ("laktoositonta maitoa").
-SYNONYMS = {
-    "maito": "milk", "maitoa": "milk", "maidon": "milk",
-    "laktoositon": "lactose-free", "laktoositonta": "lactose-free",
-    "kaura": "oat", "kaurajuoma": "oat", "kaurajuomaa": "oat",
-    "kerma": "cream", "kermaa": "cream", "voi": "butter", "voita": "butter",
-    "juusto": "cheese", "juustoa": "cheese", "jogurtti": "yoghurt", "jogurttia": "yoghurt",
-    "kananmuna": "eggs", "kananmunia": "eggs", "munat": "eggs",
-    "peruna": "potatoes", "perunaa": "potatoes", "tomaatti": "tomatoes", "tomaatteja": "tomatoes",
-    "kahvi": "coffee", "kahvia": "coffee", "luomu": "organic",
-}
+SEARCH_LIMIT_PER_MINUTE = 30
+NON_FOOD_TAX_RATE = 20.0   # Finnish VAT: food 13.5 %, non-food and alcohol 25.5 %
+TERMINAL_UNKNOWN = 999999
 
 _lock = threading.Lock()
 
@@ -49,13 +43,8 @@ class MandateError(WholesalerError):
 
 
 def today() -> date:
-    """DEMO_TODAY=YYYY-MM-DD fixes the date so demos are repeatable."""
     fixed = os.environ.get("DEMO_TODAY")
     return date.fromisoformat(fixed) if fixed else date.today()
-
-
-def _load(name: str) -> dict:
-    return json.loads((DATA_DIR / name).read_text(encoding="utf-8"))
 
 
 def _sha(obj) -> str:
@@ -64,18 +53,21 @@ def _sha(obj) -> str:
 
 class Store:
     def __init__(self) -> None:
+        self.catalog = None     # injected in tests; otherwise loaded lazily from data/valio
+        self.valio = default_valio
         self.reset()
 
     def reset(self) -> None:
-        catalog = _load("catalog.json")
-        self.suppliers = {s["id"]: s for s in catalog["suppliers"]}
-        self.products = {p["id"]: dict(p) for p in catalog["products"]}
-        self.buyers = {b["id"]: json.loads(json.dumps(b)) for b in _load("buyers.json")["buyers"]}
+        raw = json.loads((config.ROOT / "data" / "buyers.json").read_text(encoding="utf-8"))
+        self.buyers = {b["id"]: json.loads(json.dumps(b)) for b in raw["buyers"]}
         self.quotes: dict[str, dict] = {}
         self.orders: dict[str, dict] = {}
         self.audit: list[dict] = []
         self.search_times: dict[str, list[float]] = {}
         self._ids = itertools.count(1)
+
+    def get_catalog(self):
+        return self.catalog or get_catalog()
 
     def next_id(self, prefix: str) -> str:
         return f"{prefix}-{next(self._ids):04d}"
@@ -90,11 +82,7 @@ def audit(actor: str, action: str, summary: str, *, reason: str = "", data: dict
     entry = {
         "seq": len(store.audit) + 1,
         "at": datetime.now().isoformat(timespec="seconds"),
-        "actor": actor,
-        "action": action,
-        "summary": summary,
-        "reason": reason,
-        "data": data or {},
+        "actor": actor, "action": action, "summary": summary, "reason": reason, "data": data or {},
         "prev_hash": store.audit[-1]["hash"] if store.audit else "0" * 64,
     }
     entry["hash"] = _sha(entry)
@@ -102,7 +90,6 @@ def audit(actor: str, action: str, summary: str, *, reason: str = "", data: dict
 
 
 def verify_audit() -> dict:
-    """Recompute the chain; any edited or deleted entry breaks it."""
     prev = "0" * 64
     for e in store.audit:
         body = {k: v for k, v in e.items() if k != "hash"}
@@ -131,8 +118,8 @@ def check_mandate(buyer: dict) -> dict:
 
 
 def public_mandate(buyer: dict) -> dict:
-    """What the agent (and the buyer) can read about the agent's own authority."""
-    return {"buyer": buyer["name"], "approver": buyer["approver"], **buyer["mandate"]}
+    return {"buyer": buyer["name"], "approver": buyer["approver"], "usual_weekly": buyer.get("usual_weekly", {}),
+            **buyer["mandate"]}
 
 
 def set_mandate_revoked(buyer_id: str, revoked: bool, by: str) -> dict:
@@ -143,33 +130,10 @@ def set_mandate_revoked(buyer_id: str, revoked: bool, by: str) -> dict:
     return public_mandate(buyer)
 
 
-def price_for(buyer: dict, p: dict) -> float:
-    return buyer.get("contract_prices", {}).get(p["id"], p["unit_price_eur"])
-
-
 # ---------------------------------------------------------------- helpers
 
-def _public(p: dict, buyer: dict) -> dict:
-    """Need-to-know view of a product for one buyer. No exact stock, no other prices."""
-    contract = p["id"] in buyer.get("contract_prices", {})
-    return {
-        "product_id": p["id"],
-        "name": p["name"],
-        "category": p["category"],
-        "unit": p["unit"],
-        "unit_price_eur": price_for(buyer, p),
-        "price_basis": "your contract price" if contract else "list price",
-        "min_order_qty": p["min_order_qty"],
-        "in_stock": p["stock"] > 0,
-        "lead_time_days": p["lead_time_days"],
-        "supplier": store.suppliers[p["supplier_id"]]["name"],
-        "labels": p["labels"],
-        "co2_kg_per_unit": p["co2_kg_per_unit"],
-    }
-
-
 def _product(product_id: str) -> dict:
-    p = store.products.get(product_id)
+    p = store.get_catalog().products.get(product_id)
     if not p:
         raise WholesalerError(f"No product with id {product_id}.")
     return p
@@ -184,10 +148,6 @@ def _parse_date(value: str | None) -> date | None:
         raise WholesalerError("Dates must be ISO format YYYY-MM-DD.") from exc
 
 
-def normalize_terms(text: str) -> list[str]:
-    return [SYNONYMS.get(w, w) for w in text.lower().split() if w]
-
-
 def _throttle(buyer_id: str) -> None:
     now = time.monotonic()
     recent = [t for t in store.search_times.get(buyer_id, []) if now - t < 60]
@@ -197,96 +157,131 @@ def _throttle(buyer_id: str) -> None:
     store.search_times[buyer_id] = recent
 
 
+def _live(product_ids: list[str], requested_date: str) -> tuple[dict, dict]:
+    try:
+        return store.valio.availability(product_ids, requested_date), store.valio.price(product_ids, requested_date)
+    except ValioApiError as exc:
+        raise WholesalerError(f"Live price/availability is unavailable right now ({exc}).") from exc
+
+
+def _ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("+0200", "+02:00").replace("+0300", "+03:00"))
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------- agent API
 
-def search_products(buyer_id: str, query: str = "", category: str | None = None,
-                    label: str | None = None, max_results: int = 10) -> list[dict]:
+def search_products(buyer_id: str, query: str = "", max_results: int = 10) -> list[dict]:
+    """Offline catalog search (no prices, no stock): the agent narrows down before asking live."""
     buyer = store.buyers[buyer_id]
     check_mandate(buyer)
     _throttle(buyer_id)
-    words = normalize_terms(query)
-    hits = []
-    for p in store.products.values():
-        haystack = " ".join([p["name"], p["category"], *p["labels"]]).lower()
-        if category and p["category"] != category:
-            continue
-        if label and label.lower() not in [l.lower() for l in p["labels"]]:
-            continue
-        score = sum(w in haystack for w in words) if words else 1
-        if score:
-            hits.append((score, p))
-    hits.sort(key=lambda t: (-t[0], price_for(buyer, t[1])))
-    results = [_public(p, buyer) for _, p in hits[:max_results]]
-    audit(f"agent:{buyer_id}", "search_products", f"Searched '{query}' -> {len(results)} results",
-          data={"query": query, "category": category, "label": label})
+    terms = [t for t in query.split(",") if t.strip()] or [query]
+    found = store.get_catalog().search([t.strip() for t in terms], limit=max_results)
+    results = [public_view(p) for p in found["candidates"]]
+    audit(f"agent:{buyer_id}", "search_products", f"Searched '{query}' -> {len(results)} results (offline catalog)",
+          data={"query": query})
     return results
 
 
-def check_availability(buyer_id: str, product_id: str, quantity: float,
-                       deliver_by: str | None = None) -> dict:
+def smart_lookup(buyer_id: str, request: str) -> dict:
+    """One sentence in, ranked deliverable options out (see lookup.py)."""
+    from .lookup import lookup
+    buyer = store.buyers[buyer_id]
+    check_mandate(buyer)
+    result = lookup(request, today=today(), catalog=store.get_catalog(), valio=store.valio)
+    first = result["results"][0] if result["results"] else None
+    plan = first["plan"] if first else {}
+    audit(f"agent:{buyer_id}", "smart_lookup",
+          f"Lookup '{request[:60]}': {result['api']['products_checked']} of {result['api']['catalog_size']} products "
+          f"checked live in {result['api']['calls']} API calls; plan: {plan.get('type', 'none')} ({plan.get('confidence', '-')})",
+          reason=plan.get("why", ""), data={"api": result["api"], "ai_usage": result["ai_usage"]})
+    return result
+
+
+def check_availability(buyer_id: str, product_id: str, quantity: float, deliver_by: str | None = None) -> dict:
     buyer = store.buyers[buyer_id]
     check_mandate(buyer)
     p = _product(product_id)
-    deadline = _parse_date(deliver_by)
-    earliest = today() + timedelta(days=p["lead_time_days"])
-    available_qty = min(quantity, p["stock"])   # never reveals more stock than asked for
-    price = price_for(buyer, p)
+    requested = (_parse_date(deliver_by) or today() + timedelta(days=2)).isoformat()
+    avail, prices = _live([product_id], requested)
+    a, pr = avail.get(product_id, {}), prices.get(product_id, {})
+    line = (a.get("scheduleLines") or [None])[0] or {}
+    amount = line.get("availableAmount")
     result = {
-        **_public(p, buyer),
-        "requested_qty": quantity,
-        "available_qty": available_qty,
-        "fully_available": p["stock"] >= quantity,
-        "meets_min_order": quantity >= p["min_order_qty"],
-        "earliest_delivery": earliest.isoformat(),
-        "meets_deadline": deadline is None or earliest <= deadline,
-        "line_total_eur": round(available_qty * price, 2),
+        **public_view(p),
+        "requested_units": quantity, "requested_date": requested,
+        "sales_blocked": bool(a.get("salesBlock") or line.get("salesBlock")),
+        "available_units": None if amount == TERMINAL_UNKNOWN else amount,
+        "stock_source": "supplier (quantity not confirmed)" if a.get("logisticModel") == "Terminal" else "Valio stock",
+        "available_date": line.get("availableDate"), "order_cutoff": a.get("closingTime"),
+        "unit_price_eur": (pr.get("catalogPrice") or {}).get("value"),
+        "price_per_unit": (pr.get("comparisonPrice") or {}).get("value"), "price_unit": pr.get("comparisonUnit"),
+        "tax_rate": (pr.get("tax") or {}).get("taxRate"),
     }
     audit(f"agent:{buyer_id}", "check_availability",
-          f"{p['name']} ({p['id']}): {available_qty:g}/{quantity:g} {p['unit']} available, earliest {earliest}",
+          f"{p['name']} ({product_id}): {result['stock_source']}, earliest {result['available_date']}",
           data={"product_id": product_id, "quantity": quantity})
     return result
 
 
 def request_quote(buyer_id: str, items: list[dict], deliver_by: str | None = None) -> dict:
+    """Binding fixed-price quote from live Valio prices. items = [{product_id, quantity (sales units)}]."""
     buyer = store.buyers[buyer_id]
     check_mandate(buyer)
-    deadline = _parse_date(deliver_by)
     if not items:
         raise WholesalerError("A quote needs at least one item.")
+    requested = (_parse_date(deliver_by) or today() + timedelta(days=2)).isoformat()
+    products = [_product(i["product_id"]) for i in items]
+    avail, prices = _live([p["id"] for p in products], requested)
     lines, problems = [], []
-    for item in items:
-        p = _product(item["product_id"])
+    for item, p in zip(items, products):
         qty = float(item["quantity"])
         if qty <= 0:
             raise WholesalerError("Quantities must be positive.")
-        earliest = today() + timedelta(days=p["lead_time_days"])
-        if qty < p["min_order_qty"]:
-            problems.append(f"{p['id']}: below minimum order quantity {p['min_order_qty']} {p['unit']}.")
-        if qty > p["stock"]:
-            problems.append(f"{p['id']}: not enough stock for {qty:g} {p['unit']}.")
-        if deadline and earliest > deadline:
-            problems.append(f"{p['id']}: earliest delivery {earliest} is after {deadline}.")
-        price = price_for(buyer, p)
+        a, pr = avail.get(p["id"], {}), prices.get(p["id"], {})
+        line = (a.get("scheduleLines") or [None])[0]
+        cp = pr.get("catalogPrice") or {}
+        if pr.get("error") or not cp.get("value"):
+            problems.append(f"{p['id']}: no price available.")
+            continue
+        if a.get("salesBlock") or not line or line.get("salesBlock"):
+            problems.append(f"{p['id']}: cannot be ordered right now (sales block or no delivery date).")
+            continue
+        supplier = a.get("logisticModel") == "Terminal" or line.get("availableAmount") == TERMINAL_UNKNOWN
+        if not supplier and line.get("availableAmount", 0) < qty:
+            problems.append(f"{p['id']}: only {line.get('availableAmount', 0):g} {p['sales_unit']} available.")
+            continue
+        if line.get("availableDate") and line["availableDate"] > requested:
+            problems.append(f"{p['id']}: earliest delivery {line['availableDate']} is after {requested}.")
+            continue
+        closing, now = _ts(a.get("closingTime")), _ts((a.get("_meta") or {}).get("timeNow"))
+        content = p["content_per_sales_unit"]
+        cmp = pr.get("comparisonPrice") or {}
+        if cmp.get("value"):
+            content = round(cp["value"] / cmp["value"], 3)
         lines.append({
             "product_id": p["id"], "name": p["name"], "category": p["category"],
-            "quantity": qty, "unit": p["unit"], "unit_price_eur": price,
-            "line_total_eur": round(qty * price, 2),
-            "lead_time_days": p["lead_time_days"],
-            "earliest_delivery": earliest.isoformat(),
-            "supplier": store.suppliers[p["supplier_id"]]["name"],
+            "quantity": qty, "unit": p["sales_unit"], "unit_price_eur": cp["value"],
+            "line_total_eur": round(qty * cp["value"], 2), "tax_rate": (pr.get("tax") or {}).get("taxRate"),
+            "content": round(qty * content, 2) if content else None, "content_unit": pr.get("comparisonUnit") or p["content_unit"],
+            "available_date": line.get("availableDate"),
+            "stock_source": "supplier" if supplier else "valio_stock",
+            "cutoff_passed": bool(closing and now and closing < now), "order_cutoff": a.get("closingTime"),
         })
     if problems:
         audit(f"agent:{buyer_id}", "request_quote", "Quote refused: " + " ".join(problems), data={"items": items})
         raise WholesalerError("Cannot quote: " + " ".join(problems))
     total = round(sum(l["line_total_eur"] for l in lines), 2)
     quote = {
-        "quote_id": store.next_id("Q"),
-        "buyer_id": buyer_id,
-        "lines": lines,
-        "total_eur": total,
-        "deliver_by": deadline.isoformat() if deadline else None,
+        "quote_id": store.next_id("Q"), "buyer_id": buyer_id, "lines": lines, "total_eur": total,
+        "currency": "EUR (excl. VAT)", "deliver_by": requested,
         "valid_until": (datetime.now() + timedelta(minutes=QUOTE_VALID_MINUTES)).isoformat(timespec="seconds"),
-        "pricing": "fixed price, no negotiation",
+        "pricing": "fixed Valio price for this customer and date, no negotiation",
     }
     quote["policy_preview"] = evaluate(buyer, quote, is_substitute=False)
     store.quotes[quote["quote_id"]] = quote
@@ -297,19 +292,28 @@ def request_quote(buyer_id: str, items: list[dict], deliver_by: str | None = Non
 
 
 def evaluate(buyer: dict, quote: dict, *, is_substitute: bool) -> dict:
-    """The door's decision: may the agent order alone, does a human need to approve, or is it blocked?"""
+    """The door's decision: agent may order alone, needs a human, or is blocked. Plain rules, plain reasons."""
     m = buyer["mandate"]
     block, approve = [], []
     for line in quote["lines"]:
-        if line["category"] not in m["allowed_categories"]:
-            block.append(f"Category '{line['category']}' is outside the mandate.")
-        if line["lead_time_days"] > m["max_lead_time_days"]:
-            block.append(f"{line['product_id']} lead time {line['lead_time_days']} days exceeds the mandate's {m['max_lead_time_days']}.")
-        usual = buyer.get("usual_weekly_qty", {}).get(line["product_id"])
-        if usual and line["quantity"] > m["unusual_order_factor"] * usual:
-            approve.append(
-                f"Unusual order: {line['quantity']:g} {line['unit']} of {line['product_id']} is "
-                f"{line['quantity'] / usual:.1f}x the usual weekly {usual:g} {line['unit']}.")
+        if m.get("food_only") and (line.get("tax_rate") or 0) >= NON_FOOD_TAX_RATE:
+            block.append(f"{line['name']} is not food (VAT {line['tax_rate']} %): outside the mandate.")
+        if line.get("available_date"):
+            lead = (date.fromisoformat(line["available_date"]) - today()).days
+            if lead > m["max_lead_time_days"]:
+                block.append(f"{line['product_id']} arrives in {lead} days; the mandate allows {m['max_lead_time_days']}.")
+        if line.get("cutoff_passed"):
+            approve.append(f"{line['name']}: the supplier's order cutoff has passed, so delivery by "
+                           f"{quote['deliver_by']} is not guaranteed.")
+    per_category = defaultdict(float)
+    for line in quote["lines"]:
+        if line.get("content"):
+            per_category[line["category"]] += line["content"]
+    for cat, amount in per_category.items():
+        usual = buyer.get("usual_weekly", {}).get(cat)
+        if usual and amount > m["unusual_order_factor"] * usual["quantity"]:
+            approve.append(f"Unusual order: {amount:g} {usual['unit']} of {usual['name']} is "
+                           f"{amount / usual['quantity']:.1f}x the usual weekly {usual['quantity']:g} {usual['unit']}.")
     if quote["total_eur"] > m["hard_limit_eur"]:
         block.append(f"Total {quote['total_eur']} EUR exceeds the mandate's hard limit {m['hard_limit_eur']} EUR.")
     if quote["total_eur"] > m["auto_approve_limit_eur"]:
@@ -320,15 +324,13 @@ def evaluate(buyer: dict, quote: dict, *, is_substitute: bool) -> dict:
         return {"decision": "blocked", "reasons": block}
     if approve:
         return {"decision": "needs_human_approval", "approver": buyer["approver"], "reasons": approve}
-    return {"decision": "agent_may_order", "reasons": ["Within the mandate: under the spending limit, allowed categories, normal quantities."]}
+    return {"decision": "agent_may_order", "reasons": ["Within the mandate: under the spending limit, food only, normal quantities, delivery confirmed."]}
 
 
-def _approve_by(lines: list[dict], deliver_by: str | None) -> str | None:
-    """Latest moment a human can approve and still make the delivery date."""
-    if not deliver_by:
-        return None
-    latest_day = date.fromisoformat(deliver_by) - timedelta(days=max(l["lead_time_days"] for l in lines))
-    return datetime(latest_day.year, latest_day.month, latest_day.day, ORDER_CUTOFF_HOUR).isoformat(timespec="minutes")
+def _approve_by(quote: dict) -> str | None:
+    """Latest time a human can approve and still keep the delivery date (earliest relevant cutoff)."""
+    cutoffs = [l["order_cutoff"] for l in quote["lines"] if l.get("order_cutoff") and not l.get("cutoff_passed")]
+    return min(cutoffs)[:16] if cutoffs else None
 
 
 def place_order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool = False) -> dict:
@@ -348,25 +350,16 @@ def place_order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool =
         status = {"agent_may_order": "confirmed", "needs_human_approval": "pending_approval",
                   "blocked": "rejected"}[decision["decision"]]
         order = {
-            "order_id": store.next_id("O"),
-            "buyer_id": buyer_id,
-            "buyer_name": buyer["name"],
-            "mandate_id": buyer["mandate"]["id"],
-            "quote_id": quote_id,
-            "lines": quote["lines"],
-            "total_eur": quote["total_eur"],
-            "deliver_by": quote["deliver_by"],
-            "agent_reason": reason,
-            "is_substitute": is_substitute,
-            "policy": decision,
-            "status": status,
-            "approve_by": _approve_by(quote["lines"], quote["deliver_by"]) if status == "pending_approval" else None,
+            "order_id": store.next_id("O"), "buyer_id": buyer_id, "buyer_name": buyer["name"],
+            "mandate_id": buyer["mandate"]["id"], "quote_id": quote_id, "lines": quote["lines"],
+            "total_eur": quote["total_eur"], "deliver_by": quote["deliver_by"], "agent_reason": reason,
+            "is_substitute": is_substitute, "policy": decision, "status": status,
+            "approve_by": _approve_by(quote) if status == "pending_approval" else None,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "decided_by": "door (automatic)" if status != "pending_approval" else None,
         }
         quote["used"] = True
         if status == "confirmed":
-            _reserve_stock(order)
             order["receipt"] = _receipt(order)
         store.orders[order["order_id"]] = order
     audit(f"agent:{buyer_id}", "place_order", f"Order {order['order_id']} {order['total_eur']} EUR -> {status}",
@@ -382,16 +375,7 @@ def get_order(buyer_id: str, order_id: str) -> dict:
 
 
 def _receipt(order: dict) -> str:
-    core_fields = {k: order[k] for k in ("order_id", "buyer_id", "mandate_id", "lines", "total_eur", "deliver_by", "decided_by")}
-    return _sha(core_fields)
-
-
-def _reserve_stock(order: dict) -> None:
-    for line in order["lines"]:
-        if store.products[line["product_id"]]["stock"] < line["quantity"]:
-            raise WholesalerError(f"{line['product_id']} no longer has enough stock.")
-    for line in order["lines"]:
-        store.products[line["product_id"]]["stock"] -= line["quantity"]
+    return _sha({k: order[k] for k in ("order_id", "buyer_id", "mandate_id", "lines", "total_eur", "deliver_by", "decided_by")})
 
 
 # ---------------------------------------------------------------- human side
@@ -407,10 +391,8 @@ def decide(order_id: str, approve: bool, approver: str, note: str = "") -> dict:
             raise WholesalerError(f"No order {order_id}.")
         if order["status"] != "pending_approval":
             raise WholesalerError(f"Order {order_id} is already {order['status']}.")
-        if approve:
-            _reserve_stock(order)
-            if order["approve_by"] and datetime.now() > datetime.fromisoformat(order["approve_by"]):
-                order["warning"] = f"Approved after the cutoff {order['approve_by']}; delivery by {order['deliver_by']} is no longer guaranteed."
+        if approve and order["approve_by"] and datetime.now() > datetime.fromisoformat(order["approve_by"]):
+            order["warning"] = f"Approved after {order['approve_by']}; delivery by {order['deliver_by']} is no longer guaranteed."
         order["status"] = "confirmed" if approve else "rejected"
         order["decided_by"] = approver
         order["decision_note"] = note

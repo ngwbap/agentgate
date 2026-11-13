@@ -1,8 +1,8 @@
-"""AgentGate as an MCP server, so any MCP-capable agent (Claude Desktop, Claude Code,
-Gemini CLI, ...) can buy through the same door with the same rules.
+"""AgentGate as an MCP server, so any MCP-capable agent (Claude Desktop, Claude Code, Gemini CLI, ...)
+can buy through the same door with the same rules.
 
 Run:  set WHOLESALER_AGENT_KEY=demo-key-aurora  &&  python -m app.mcp_server
-Note: this process keeps its own in-memory store, separate from the web server.
+Note: this process keeps its own in-memory orders and audit log, separate from the web server.
 """
 from __future__ import annotations
 
@@ -27,25 +27,32 @@ def _wrap(fn, *args):
 
 @mcp.tool()
 def get_my_mandate() -> dict:
-    """Your mandate: spending limits, allowed categories, approver, validity."""
+    """Your mandate: spending limits, food only, approver, usual weekly quantities, validity."""
     return core.public_mandate(core.store.buyers[BUYER_ID])
 
 
 @mcp.tool()
-def search_products(query: str, category: str | None = None, label: str | None = None) -> list[dict] | dict:
-    """Search the catalog in English or Finnish. Returns your prices."""
-    return _wrap(core.search_products, BUYER_ID, query, category, label)
+def smart_lookup(request: str) -> dict:
+    """Best first step. One sentence (English or Finnish), e.g. 'I need 1,000 L lactose-free milk by Monday'.
+    Returns ranked, live-checked options with evidence and a recommended plan."""
+    return _wrap(core.smart_lookup, BUYER_ID, request)
+
+
+@mcp.tool()
+def search_products(query: str) -> list[dict] | dict:
+    """Offline catalog search by name (English/Finnish/Swedish). No prices - use check_availability for those."""
+    return _wrap(core.search_products, BUYER_ID, query)
 
 
 @mcp.tool()
 def check_availability(product_id: str, quantity: float, deliver_by: str | None = None) -> dict:
-    """Stock, price and earliest delivery for one product. deliver_by is YYYY-MM-DD."""
+    """Live price and availability for one product. quantity is in sales units; deliver_by is YYYY-MM-DD."""
     return _wrap(core.check_availability, BUYER_ID, product_id, quantity, deliver_by)
 
 
 @mcp.tool()
 def request_quote(items: list[dict], deliver_by: str | None = None) -> dict:
-    """Fixed-price quote. items = [{product_id, quantity}]. policy_preview tells you what the door will decide."""
+    """Fixed-price quote. items = [{product_id, quantity (sales units)}]. policy_preview shows the door's decision."""
     return _wrap(core.request_quote, BUYER_ID, items, deliver_by)
 
 
