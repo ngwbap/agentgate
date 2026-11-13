@@ -32,9 +32,23 @@ NEED_SCHEMA = {
                     "exclude_allergens": {"type": "array", "items": {"type": "string", "enum": list(ALLERGENS)}},
                     "strict_allergens": {"type": "boolean", "description": "True when 'may contain' traces must also be excluded (e.g. allergy, school or hospital kitchen)"},
                     "preferred_labels": {"type": "array", "items": {"type": "string", "enum": list(LABEL_NAMES)}},
+                    "substitutes": {
+                        "type": "array",
+                        "description": "Up to 2 other product types a chef could use for the same purpose if the requested one cannot be delivered. Empty if none is sensible.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string"},
+                                "product_terms": {"type": "array", "items": {"type": "string"}},
+                                "trade_off": {"type": "string", "description": "What the kitchen gives up, max 15 words"},
+                            },
+                            "required": ["label", "product_terms", "trade_off"],
+                            "additionalProperties": False,
+                        },
+                    },
                 },
                 "required": ["label", "product_terms", "quantity", "unit", "must_claims",
-                             "exclude_allergens", "strict_allergens", "preferred_labels"],
+                             "exclude_allergens", "strict_allergens", "preferred_labels", "substitutes"],
                 "additionalProperties": False,
             },
         },
@@ -51,7 +65,10 @@ SYSTEM = (
     "Requests may be in English, Finnish or Swedish. product_terms name the product itself in all three languages, "
     "including common Finnish compound forms (e.g. maito, maitojuoma). Put dietary needs in must_claims and allergens "
     "to avoid in exclude_allergens (GS1 codes). Convert relative dates to YYYY-MM-DD using today's date. "
-    "Default unit: L for liquids, KG for foods sold by weight, PCS otherwise. Do not invent requirements."
+    "Default unit: L for liquids, KG for foods sold by weight, PCS otherwise. Do not invent requirements. "
+    "substitutes are other product types for the same culinary purpose (not other brands or fat levels of the same "
+    "product); dietary and allergen requirements still apply to them, so never suggest one that cannot meet them. "
+    "Set strict_allergens for allergies and for school, daycare or hospital kitchens."
 )
 
 
@@ -117,8 +134,9 @@ def parse_offline(request: str, today: date) -> dict:
     return {
         "items": [{"label": product, "product_terms": list(dict.fromkeys([product, *words])), "quantity": quantity,
                    "unit": unit, "must_claims": claims, "exclude_allergens": exclude,
-                   "strict_allergens": any(w in text for w in ("allergy", "allergic", "school", "hospital")),
-                   "preferred_labels": []}],
+                   "strict_allergens": any(w in text for w in ("allergy", "allergic", "school", "hospital", "daycare",
+                                                                "koulu", "sairaala", "päiväkoti", "allergia")),
+                   "preferred_labels": [], "substitutes": []}],
         "deliver_by": deliver_by,
         "priorities": ["price"],
         "language": "fi" if re.search(r"[äö]|tarvitsen|litraa", text) else "en",
