@@ -1,0 +1,30 @@
+{
+  "buyers": [
+    {
+      "id": "hotel-aurora",
+      "name": "Hotel Aurora Helsinki (kitchen)",
+      "agent_key": "demo-key-aurora",
+      "approver": "Kitchen manager",
+      "policy": {
+        "auto_approve_limit_eur": 1000,
+        "hard_limit_eur": 20000,
+        "allowed_categories": ["dairy", "dairy-alternatives", "eggs", "vegetables", "beverages"],
+        "max_lead_time_days": 7,
+        "substitutes_need_approval": true
+      }
+    },
+    {
+      "id": "cafe-lumi",
+      "name": "Cafe Lumi",
+      "agent_key": "demo-key-lumi",
+      "approver": "Owner",
+      "policy": {
+        "auto_approve_limit_eur": 300,
+        "hard_limit_eur": 3000,
+        "allowed_categories": ["dairy", "dairy-alternatives", "beverages", "eggs"],
+        "max_lead_time_days": 5,
+        "substitutes_need_approval": true
+      }
+    }
+  ]
+}

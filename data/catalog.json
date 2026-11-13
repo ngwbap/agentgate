@@ -1,0 +1,31 @@
+{
+  "suppliers": [
+    {"id": "SUP-NORDIC", "name": "Nordic Dairy Oy", "country": "FI"},
+    {"id": "SUP-LAKE", "name": "Lakeland Farms", "country": "FI"},
+    {"id": "SUP-BALTIC", "name": "Baltic Foods AB", "country": "SE"},
+    {"id": "SUP-GREEN", "name": "Green Valley Produce", "country": "FI"}
+  ],
+  "products": [
+    {"id": "P-1001", "name": "Lactose-free milk 1.5% 1 L", "category": "dairy", "unit": "L", "unit_price_eur": 1.39, "min_order_qty": 12, "stock": 700, "lead_time_days": 1, "supplier_id": "SUP-NORDIC", "labels": ["lactose-free", "Finnish origin"], "co2_kg_per_unit": 1.2},
+    {"id": "P-1002", "name": "Lactose-free milk 1.5% 1 L", "category": "dairy", "unit": "L", "unit_price_eur": 1.45, "min_order_qty": 12, "stock": 2500, "lead_time_days": 2, "supplier_id": "SUP-LAKE", "labels": ["lactose-free", "Finnish origin", "Key Flag"], "co2_kg_per_unit": 1.1},
+    {"id": "P-1003", "name": "Lactose-free milk 0.5% 1 L", "category": "dairy", "unit": "L", "unit_price_eur": 1.32, "min_order_qty": 12, "stock": 400, "lead_time_days": 1, "supplier_id": "SUP-NORDIC", "labels": ["lactose-free"], "co2_kg_per_unit": 1.1},
+    {"id": "P-1004", "name": "Organic lactose-free milk 1.5% 1 L", "category": "dairy", "unit": "L", "unit_price_eur": 1.89, "min_order_qty": 6, "stock": 900, "lead_time_days": 3, "supplier_id": "SUP-GREEN", "labels": ["lactose-free", "organic", "Finnish origin"], "co2_kg_per_unit": 0.9},
+    {"id": "P-1005", "name": "Whole milk 3.5% 1 L", "category": "dairy", "unit": "L", "unit_price_eur": 1.19, "min_order_qty": 12, "stock": 3000, "lead_time_days": 1, "supplier_id": "SUP-NORDIC", "labels": ["Finnish origin"], "co2_kg_per_unit": 1.3},
+    {"id": "P-1006", "name": "Semi-skimmed milk 1.5% 1 L", "category": "dairy", "unit": "L", "unit_price_eur": 1.09, "min_order_qty": 12, "stock": 4000, "lead_time_days": 1, "supplier_id": "SUP-LAKE", "labels": ["Finnish origin"], "co2_kg_per_unit": 1.2},
+    {"id": "P-1007", "name": "Oat drink barista 1 L", "category": "dairy-alternatives", "unit": "L", "unit_price_eur": 1.79, "min_order_qty": 6, "stock": 1200, "lead_time_days": 2, "supplier_id": "SUP-BALTIC", "labels": ["vegan", "lactose-free"], "co2_kg_per_unit": 0.3},
+    {"id": "P-1008", "name": "Lactose-free cooking cream 15% 1 L", "category": "dairy", "unit": "L", "unit_price_eur": 3.20, "min_order_qty": 6, "stock": 300, "lead_time_days": 2, "supplier_id": "SUP-NORDIC", "labels": ["lactose-free"], "co2_kg_per_unit": 2.8},
+    {"id": "P-1009", "name": "Whipping cream 35% 1 L", "category": "dairy", "unit": "L", "unit_price_eur": 4.10, "min_order_qty": 6, "stock": 500, "lead_time_days": 1, "supplier_id": "SUP-LAKE", "labels": ["Finnish origin"], "co2_kg_per_unit": 4.5},
+    {"id": "P-1010", "name": "Natural yoghurt lactose-free 1 kg", "category": "dairy", "unit": "kg", "unit_price_eur": 2.60, "min_order_qty": 6, "stock": 600, "lead_time_days": 2, "supplier_id": "SUP-NORDIC", "labels": ["lactose-free"], "co2_kg_per_unit": 1.6},
+    {"id": "P-1011", "name": "Butter 82% 500 g", "category": "dairy", "unit": "pcs", "unit_price_eur": 3.95, "min_order_qty": 10, "stock": 800, "lead_time_days": 1, "supplier_id": "SUP-LAKE", "labels": ["Finnish origin"], "co2_kg_per_unit": 4.6},
+    {"id": "P-1012", "name": "Edam cheese block 1 kg", "category": "dairy", "unit": "kg", "unit_price_eur": 8.90, "min_order_qty": 5, "stock": 350, "lead_time_days": 2, "supplier_id": "SUP-BALTIC", "labels": [], "co2_kg_per_unit": 9.0},
+    {"id": "P-2001", "name": "Free-range eggs M 30 pcs", "category": "eggs", "unit": "tray", "unit_price_eur": 7.40, "min_order_qty": 5, "stock": 400, "lead_time_days": 1, "supplier_id": "SUP-GREEN", "labels": ["free-range", "Finnish origin"], "co2_kg_per_unit": 4.0},
+    {"id": "P-2002", "name": "Liquid whole egg 1 kg", "category": "eggs", "unit": "kg", "unit_price_eur": 5.30, "min_order_qty": 5, "stock": 250, "lead_time_days": 2, "supplier_id": "SUP-NORDIC", "labels": ["pasteurised"], "co2_kg_per_unit": 3.5},
+    {"id": "P-3001", "name": "Chicken breast fillet 2.5 kg", "category": "meat", "unit": "pack", "unit_price_eur": 24.50, "min_order_qty": 4, "stock": 300, "lead_time_days": 2, "supplier_id": "SUP-LAKE", "labels": ["Finnish origin"], "co2_kg_per_unit": 15.0},
+    {"id": "P-3002", "name": "Beef minced meat 10% 2 kg", "category": "meat", "unit": "pack", "unit_price_eur": 21.80, "min_order_qty": 4, "stock": 200, "lead_time_days": 2, "supplier_id": "SUP-LAKE", "labels": ["Finnish origin"], "co2_kg_per_unit": 52.0},
+    {"id": "P-4001", "name": "Potatoes, peeled 5 kg", "category": "vegetables", "unit": "bag", "unit_price_eur": 6.90, "min_order_qty": 4, "stock": 600, "lead_time_days": 1, "supplier_id": "SUP-GREEN", "labels": ["Finnish origin"], "co2_kg_per_unit": 1.0},
+    {"id": "P-4002", "name": "Tomatoes 6 kg box", "category": "vegetables", "unit": "box", "unit_price_eur": 18.40, "min_order_qty": 2, "stock": 150, "lead_time_days": 2, "supplier_id": "SUP-BALTIC", "labels": [], "co2_kg_per_unit": 6.0},
+    {"id": "P-4003", "name": "Iceberg lettuce 10 pcs", "category": "vegetables", "unit": "box", "unit_price_eur": 14.20, "min_order_qty": 2, "stock": 0, "lead_time_days": 2, "supplier_id": "SUP-GREEN", "labels": ["Finnish origin"], "co2_kg_per_unit": 2.0},
+    {"id": "P-5001", "name": "Coffee beans dark roast 1 kg", "category": "beverages", "unit": "kg", "unit_price_eur": 16.90, "min_order_qty": 6, "stock": 500, "lead_time_days": 3, "supplier_id": "SUP-BALTIC", "labels": ["Fairtrade"], "co2_kg_per_unit": 15.0},
+    {"id": "P-5002", "name": "Orange juice 1 L", "category": "beverages", "unit": "L", "unit_price_eur": 2.30, "min_order_qty": 12, "stock": 1500, "lead_time_days": 2, "supplier_id": "SUP-BALTIC", "labels": [], "co2_kg_per_unit": 0.8}
+  ]
+}
