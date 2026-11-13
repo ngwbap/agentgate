@@ -5,26 +5,42 @@
       "name": "Hotel Aurora Helsinki (kitchen)",
       "agent_key": "demo-key-aurora",
       "approver": "Kitchen manager",
-      "policy": {
+      "mandate": {
+        "id": "MND-AURORA-01",
+        "agent_name": "Aurora purchasing agent",
+        "issued_by": "Kitchen manager",
+        "valid_until": "2026-12-31",
         "auto_approve_limit_eur": 1000,
-        "hard_limit_eur": 20000,
+        "hard_limit_eur": 10000,
         "allowed_categories": ["dairy", "dairy-alternatives", "eggs", "vegetables", "beverages"],
         "max_lead_time_days": 7,
-        "substitutes_need_approval": true
-      }
+        "substitutes_need_approval": true,
+        "unusual_order_factor": 3,
+        "revoked": false
+      },
+      "contract_prices": {"P-1001": 1.35, "P-1005": 1.12, "P-2001": 7.10},
+      "usual_weekly_qty": {"P-1002": 120, "P-1001": 80, "P-1007": 30, "P-1005": 200, "P-2001": 10, "P-5001": 12}
     },
     {
       "id": "cafe-lumi",
       "name": "Cafe Lumi",
       "agent_key": "demo-key-lumi",
       "approver": "Owner",
-      "policy": {
+      "mandate": {
+        "id": "MND-LUMI-01",
+        "agent_name": "Lumi ordering assistant",
+        "issued_by": "Owner",
+        "valid_until": "2026-12-31",
         "auto_approve_limit_eur": 300,
         "hard_limit_eur": 3000,
         "allowed_categories": ["dairy", "dairy-alternatives", "beverages", "eggs"],
         "max_lead_time_days": 5,
-        "substitutes_need_approval": true
-      }
+        "substitutes_need_approval": true,
+        "unusual_order_factor": 3,
+        "revoked": false
+      },
+      "contract_prices": {"P-1002": 1.52, "P-1007": 1.65},
+      "usual_weekly_qty": {"P-1007": 40, "P-1006": 60, "P-5001": 6}
     }
   ]
 }

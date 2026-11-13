@@ -1,8 +1,9 @@
-"""Buyer-side purchasing agent.
+"""Demo buyer-side purchasing agent.
 
-Uses Gemini function calling when GEMINI_API_KEY is set; otherwise falls back
-to a small deterministic planner so the demo always works offline.
-Every step is returned as a transcript the UI can show.
+AgentGate itself does not depend on this agent: any MCP or HTTP agent can use the
+door. This one exists to demo the flow. It uses Gemini function calling when
+GEMINI_API_KEY is set, otherwise a small deterministic planner so the demo always
+works offline. Every step is returned as a transcript the UI can show.
 """
 from __future__ import annotations
 
@@ -15,14 +16,19 @@ from . import core
 
 TOOLS = [
     {
+        "name": "get_my_mandate",
+        "description": "Read your own mandate: spending limits, allowed categories, who approves, validity.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
         "name": "search_products",
-        "description": "Search the wholesaler catalog. Returns products with price, unit, stock flag, lead time, supplier and labels.",
+        "description": "Search the wholesaler catalog (English or Finnish). Returns products with your price, unit, stock flag, lead time, supplier and labels.",
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Free-text search, e.g. 'lactose-free milk'"},
-                "category": {"type": "string", "description": "Optional category filter, e.g. 'dairy'"},
-                "label": {"type": "string", "description": "Optional label filter, e.g. 'organic'"},
+                "query": {"type": "string", "description": "Free text, e.g. 'lactose-free milk' or 'laktoositonta maitoa'"},
+                "category": {"type": "string"},
+                "label": {"type": "string"},
             },
             "required": ["query"],
         },
@@ -35,39 +41,34 @@ TOOLS = [
             "properties": {
                 "product_id": {"type": "string"},
                 "quantity": {"type": "number"},
-                "deliver_by": {"type": "string", "description": "Deadline as YYYY-MM-DD"},
+                "deliver_by": {"type": "string", "description": "YYYY-MM-DD"},
             },
             "required": ["product_id", "quantity"],
         },
     },
     {
         "name": "request_quote",
-        "description": "Get a binding fixed-price quote for one or more lines. The result includes policy_preview telling whether you may order alone or need human approval.",
+        "description": "Get a fixed-price quote. The result's policy_preview says whether you may order alone, need human approval, or are blocked.",
         "parameters": {
             "type": "object",
             "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {"product_id": {"type": "string"}, "quantity": {"type": "number"}},
-                        "required": ["product_id", "quantity"],
-                    },
-                },
-                "deliver_by": {"type": "string", "description": "Deadline as YYYY-MM-DD"},
+                "items": {"type": "array", "items": {"type": "object", "properties": {
+                    "product_id": {"type": "string"}, "quantity": {"type": "number"}},
+                    "required": ["product_id", "quantity"]}},
+                "deliver_by": {"type": "string", "description": "YYYY-MM-DD"},
             },
             "required": ["items"],
         },
     },
     {
         "name": "place_order",
-        "description": "Place an order from a quote. Orders above your authority automatically go to a human for approval.",
+        "description": "Order from a quote, with a short human-readable reason. The door decides: confirmed, pending human approval, or rejected.",
         "parameters": {
             "type": "object",
             "properties": {
                 "quote_id": {"type": "string"},
-                "reason": {"type": "string", "description": "Short human-readable explanation of why this option was chosen"},
-                "is_substitute": {"type": "boolean", "description": "True if this is not exactly what the user asked for"},
+                "reason": {"type": "string"},
+                "is_substitute": {"type": "boolean"},
             },
             "required": ["quote_id", "reason"],
         },
@@ -76,32 +77,31 @@ TOOLS = [
 
 
 def _system_prompt(buyer: dict) -> str:
-    pol = buyer["policy"]
+    m = buyer["mandate"]
     return (
         f"You are the purchasing agent for {buyer['name']}. Today is {core.today().isoformat()} "
-        f"({core.today().strftime('%A')}). You buy from a food-service wholesaler using the tools.\n"
+        f"({core.today().strftime('%A')}). You buy from Valio Aimo through its AgentGate tools.\n"
         "Process: search -> check availability -> request a quote -> place the order with a clear reason.\n"
-        "Prefer options that fully meet quantity and deadline, then lowest total price. "
-        "You may split one need across several products/suppliers in a single quote if one cannot cover it. "
-        "If the exact product is impossible, propose the closest substitute and set is_substitute=true.\n"
-        f"Your authority: orders up to {pol['auto_approve_limit_eur']} EUR are automatic; above that a "
-        f"{buyer['approver']} must approve; never exceed {pol['hard_limit_eur']} EUR. "
-        "Never invent product ids or prices. Convert relative dates like 'by Monday' to YYYY-MM-DD.\n"
-        "Finish with a short summary for the user: what you ordered, total, delivery date, and order status."
+        "Prefer options that fully meet quantity and deadline, then lowest total price. If the exact product "
+        "is impossible, propose the closest substitute with is_substitute=true.\n"
+        f"Your mandate: up to {m['auto_approve_limit_eur']} EUR alone; above that the {buyer['approver']} approves; "
+        f"never above {m['hard_limit_eur']} EUR. The door enforces this anyway.\n"
+        "Never invent product ids or prices. Convert relative dates like 'by Monday' to YYYY-MM-DD. "
+        "Answer in the user's language. Finish with: what you ordered, total, delivery date, order status and why."
     )
 
 
 def _call_tool(buyer_id: str, name: str, args: dict):
-    actor = f"agent:{buyer_id}"
+    if name == "get_my_mandate":
+        return core.public_mandate(core.store.buyers[buyer_id])
     if name == "search_products":
-        return core.search_products(args.get("query", ""), args.get("category"), args.get("label"), actor=actor)
+        return core.search_products(buyer_id, args.get("query", ""), args.get("category"), args.get("label"))
     if name == "check_availability":
-        return core.check_availability(args["product_id"], float(args["quantity"]), args.get("deliver_by"), actor=actor)
+        return core.check_availability(buyer_id, args["product_id"], float(args["quantity"]), args.get("deliver_by"))
     if name == "request_quote":
-        return core.request_quote(buyer_id, args["items"], args.get("deliver_by"), actor=actor)
+        return core.request_quote(buyer_id, args["items"], args.get("deliver_by"))
     if name == "place_order":
-        return core.place_order(buyer_id, args["quote_id"], args.get("reason", ""),
-                                bool(args.get("is_substitute", False)), actor=actor)
+        return core.place_order(buyer_id, args["quote_id"], args.get("reason", ""), bool(args.get("is_substitute", False)))
     raise core.WholesalerError(f"Unknown tool {name}")
 
 
@@ -153,23 +153,29 @@ def _run_gemini(buyer: dict, request: str, max_steps: int = 12) -> dict:
     return {"engine": f"gemini:{model}", "steps": steps, "answer": "Stopped: too many steps."}
 
 
-# ---------------------------------------------------------------- offline fallback
+# ---------------------------------------------------------------- offline planner
 
-_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-_STOP = {"i", "need", "we", "please", "buy", "order", "get", "of", "by", "the", "a", "an", "for",
-         "find", "option", "that", "meets", "our", "requirements", "based", "on", "price", "and",
-         "availability", "litres", "liters", "l", "kg", "pcs", "units", "next", "before", "until"}
+_WEEKDAYS = [("monday", "maanantai"), ("tuesday", "tiistai"), ("wednesday", "keskiviikko"),
+             ("thursday", "torstai"), ("friday", "perjantai"), ("saturday", "lauantai"), ("sunday", "sunnuntai")]
+_STOP = {"i", "need", "we", "please", "buy", "order", "get", "of", "by", "the", "a", "an", "for", "find",
+         "option", "that", "meets", "our", "requirements", "based", "on", "price", "and", "availability",
+         "litres", "liters", "l", "kg", "pcs", "units", "next", "before", "until",
+         "tarvitsen", "tarvitaan", "litraa", "kiloa", "mennessä", "ensi", "tilaa", "kpl"}
 
 
 def _parse_deadline(text: str) -> str | None:
     m = re.search(r"\d{4}-\d{2}-\d{2}", text)
     if m:
         return m.group(0)
-    for i, day in enumerate(_WEEKDAYS):
-        if re.search(rf"\b{day}\b", text, re.I):
+    for i, names in enumerate(_WEEKDAYS):
+        if any(re.search(rf"\b{n}", text, re.I) for n in names):
             delta = (i - core.today().weekday()) % 7 or 7
             return (core.today() + timedelta(days=delta)).isoformat()
     return None
+
+
+def _is_weekday(word: str) -> bool:
+    return any(word.startswith(n) for pair in _WEEKDAYS for n in pair)
 
 
 def _run_scripted(buyer: dict, request: str) -> dict:
@@ -180,36 +186,43 @@ def _run_scripted(buyer: dict, request: str) -> dict:
         steps.append({"tool": name, "args": args, "result": result})
         return result
 
+    def done(answer):
+        return {"engine": "offline planner", "steps": steps, "answer": answer}
+
     qty_match = re.search(r"(\d[\d\s,.]*)", request)
-    quantity = float(re.sub(r"[\s,]", "", qty_match.group(1))) if qty_match else 1.0
+    quantity = float(re.sub(r"[\s,]", "", qty_match.group(1)).rstrip(".")) if qty_match else 1.0
     deadline = _parse_deadline(request)
-    words = [w for w in re.findall(r"[a-zA-Z-]+", request.lower())
-             if w not in _STOP and w not in _WEEKDAYS]
-    query = " ".join(words)
+    raw = [w for w in re.findall(r"[a-zA-ZäöåÄÖÅ-]+", request.lower()) if w not in _STOP and not _is_weekday(w)]
+    query = " ".join(raw)
+    words = core.normalize_terms(query)
 
+    mandate = step("get_my_mandate", {})
     products = step("search_products", {"query": query})
+    if isinstance(products, dict) and products.get("error"):
+        return done(products["error"])
     if not products:
-        return {"engine": "scripted", "steps": steps, "answer": f"No products found for '{query}'."}
-    best_score = max(sum(w in (p["name"] + " " + " ".join(p["labels"])).lower() for w in words)
-                     for p in products)
-    exact = [p for p in products
-             if sum(w in (p["name"] + " " + " ".join(p["labels"])).lower() for w in words) == best_score]
+        return done(f"No products found for '{query}'.")
 
+    def score(p):
+        text = (p["name"] + " " + " ".join(p["labels"])).lower()
+        return sum(w in text for w in words)
+
+    best = max(score(p) for p in products)
+    exact = [p for p in products if score(p) == best]
     checks = [step("check_availability", {"product_id": p["product_id"], "quantity": quantity,
                                           "deliver_by": deadline}) for p in exact[:4]]
-    viable = [c for c in checks if c["meets_deadline"] and not c.get("error")]
+    viable = [c for c in checks if not c.get("error") and c["meets_deadline"]]
 
-    # 1) one product covers everything, cheapest first
     full = sorted([c for c in viable if c["fully_available"] and c["meets_min_order"]],
                   key=lambda c: c["line_total_eur"])
-    items, reason = None, ""
     if full:
         c = full[0]
         items = [{"product_id": c["product_id"], "quantity": quantity}]
+        others = len(checks) - 1
         reason = (f"Cheapest option that covers all {quantity:g} {c['unit']} by {deadline or 'the requested date'}: "
-                  f"{c['name']} from {c['supplier']} at {c['unit_price_eur']} EUR/{c['unit']}.")
+                  f"{c['name']} from {c['supplier']} at {c['unit_price_eur']} EUR/{c['unit']} ({c['price_basis']}). "
+                  f"Compared {others} other option(s); they lacked stock or missed the deadline.")
     else:
-        # 2) split across cheapest products meeting the deadline
         remaining, items, used = quantity, [], []
         for c in sorted(viable, key=lambda c: c["unit_price_eur"]):
             take = min(remaining, c["available_qty"])
@@ -220,22 +233,44 @@ def _run_scripted(buyer: dict, request: str) -> dict:
             if remaining <= 0:
                 break
         if remaining > 0 or not items:
-            return {"engine": "scripted", "steps": steps,
-                    "answer": "No combination of products meets the quantity and deadline. A human should decide on a substitute."}
+            return done("No product combination meets the quantity and deadline. A human should choose a substitute.")
         reason = "No single supplier could cover the order in time, so it is split: " + ", ".join(used) + "."
 
     quote = step("request_quote", {"items": items, "deliver_by": deadline})
     if quote.get("error"):
-        return {"engine": "scripted", "steps": steps, "answer": quote["error"]}
-    order = step("place_order", {"quote_id": quote["quote_id"], "reason": reason, "is_substitute": False})
+        return done(quote["error"])
+    order = step("place_order", {"quote_id": quote["quote_id"], "reason": reason})
     if order.get("error"):
-        return {"engine": "scripted", "steps": steps, "answer": order["error"]}
+        return done(order["error"])
     status_text = {
-        "confirmed": "confirmed automatically (within my authority)",
-        "pending_approval": f"waiting for approval by the {buyer['approver']}",
-        "rejected": "rejected by policy",
+        "confirmed": "confirmed automatically (within my mandate)",
+        "pending_approval": f"waiting for the {buyer['approver']} (approve by {order['approve_by']})",
+        "rejected": "rejected by the door",
     }[order["status"]]
-    answer = (f"Order {order['order_id']}: {', '.join(f'{l['quantity']:g} {l['unit']} {l['name']} ({l['supplier']})' for l in order['lines'])}. "
-              f"Total {order['total_eur']} EUR, delivery by {order['deliver_by']}. Status: {status_text}. "
-              f"Why: {' '.join(order['policy']['reasons'])}")
-    return {"engine": "scripted", "steps": steps, "answer": answer}
+    lines = ", ".join(f"{l['quantity']:g} {l['unit']} {l['name']} ({l['supplier']})" for l in order["lines"])
+    return done(f"Order {order['order_id']}: {lines}. Total {order['total_eur']} EUR, delivery by "
+                f"{order['deliver_by']}. Status: {status_text}. Why: {' '.join(order['policy']['reasons'])}")
+
+
+# ---------------------------------------------------------------- misbehaving agent
+
+def run_rogue(buyer_id: str) -> dict:
+    """Simulates a confused or hijacked agent trying to break the rules. The door must stop every attempt."""
+    core.audit(f"user:{buyer_id}", "request", "DEMO: simulate a misbehaving agent")
+    attempts = [
+        ("Huge order far above the hard limit",
+         "request_quote", {"items": [{"product_id": "P-5001", "quantity": 500}, {"product_id": "P-1005", "quantity": 2000}]}),
+        ("Category the buyer never allowed (meat)",
+         "request_quote", {"items": [{"product_id": "P-3001", "quantity": 4}]}),
+        ("Invented product id", "check_availability", {"product_id": "P-9999", "quantity": 10}),
+    ]
+    steps = []
+    for label, tool, args in attempts:
+        result = _safe_call(buyer_id, tool, args)
+        if tool == "request_quote" and not result.get("error"):
+            result = _safe_call(buyer_id, "place_order", {"quote_id": result["quote_id"],
+                                                          "reason": "Agent decided to stock up."})
+        steps.append({"tool": f"{tool}  [{label}]", "args": args, "result": result})
+    outcome = [s["result"].get("status") or ("refused" if s["result"].get("error") else "?") for s in steps]
+    return {"engine": "misbehaving agent (simulation)", "steps": steps,
+            "answer": "Every attempt was stopped by the door: " + ", ".join(outcome) + "."}

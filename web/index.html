@@ -3,62 +3,63 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trusted Trade Agents</title>
+<title>AgentGate</title>
 <style>
-  :root {
-    --bg: #f6f7f9; --panel: #ffffff; --ink: #1b1f24; --muted: #5d6673; --line: #e2e5ea;
-    --accent: #0b5cad; --ok: #1f7a3d; --warn: #9a5b00; --bad: #b42318; --chip: #eef2f7;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #111418; --panel: #1a1f25; --ink: #e8ebef; --muted: #9aa4b1; --line: #2b323b;
-      --accent: #5aa2ff; --ok: #4cc27a; --warn: #f0a842; --bad: #ff6b5e; --chip: #232a33; }
-  }
+  :root { --bg:#f6f7f9; --panel:#fff; --ink:#1b1f24; --muted:#5d6673; --line:#e2e5ea; --accent:#0b5cad;
+    --ok:#1f7a3d; --warn:#9a5b00; --bad:#b42318; --chip:#eef2f7; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --panel:#1a1f25; --ink:#e8ebef; --muted:#9aa4b1;
+    --line:#2b323b; --accent:#5aa2ff; --ok:#4cc27a; --warn:#f0a842; --bad:#ff6b5e; --chip:#232a33; } }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
-  header { padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
-  header h1 { font-size: 18px; margin: 0; }
-  header p { margin: 0; color: var(--muted); }
-  main { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 14px; padding: 14px; }
-  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-height: 200px; overflow: hidden; }
-  h2 { font-size: 14px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
-  select, textarea, input, button { font: inherit; color: inherit; }
-  select, textarea, input { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
-  textarea { min-height: 70px; resize: vertical; }
-  button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
-  button.secondary { background: transparent; color: var(--accent); }
-  button.reject { background: transparent; border-color: var(--bad); color: var(--bad); }
-  button:disabled { opacity: .5; cursor: wait; }
-  .row { display: flex; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
-  .policy { font-size: 12px; color: var(--muted); margin: 6px 0 10px; }
-  .step { border-left: 3px solid var(--line); padding: 4px 10px; margin: 6px 0; }
-  .step b { font-family: ui-monospace, monospace; font-size: 12px; }
-  .step pre { margin: 4px 0 0; font-size: 11px; max-height: 120px; overflow: auto; white-space: pre-wrap; color: var(--muted); }
-  .answer { background: var(--chip); border-radius: 8px; padding: 10px; margin-top: 10px; }
-  .card { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
-  .status { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--chip); }
-  .status.confirmed { color: var(--ok); } .status.pending_approval { color: var(--warn); } .status.rejected { color: var(--bad); }
-  .muted { color: var(--muted); font-size: 12px; }
-  .log { font-size: 12px; border-bottom: 1px solid var(--line); padding: 6px 0; }
-  .log .who { font-family: ui-monospace, monospace; color: var(--accent); }
-  .empty { color: var(--muted); font-style: italic; }
-  .scroll { max-height: 70vh; overflow: auto; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:18px; margin:0; } header p { margin:2px 0 0; color:var(--muted); }
+  main { display:grid; grid-template-columns:1.25fr 1fr 1fr; gap:14px; padding:14px; }
+  @media (max-width:1000px) { main { grid-template-columns:1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; min-width:0; }
+  h2 { font-size:13px; margin:0 0 10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  select,textarea,input,button { font:inherit; color:inherit; }
+  select,textarea,input { width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+  textarea { min-height:64px; resize:vertical; }
+  button { padding:7px 12px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--accent); }
+  button.danger { background:transparent; border-color:var(--bad); color:var(--bad); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .row { display:flex; gap:8px; margin:8px 0; flex-wrap:wrap; align-items:center; }
+  .mandate { border:1px solid var(--line); border-radius:8px; padding:10px; margin:8px 0; font-size:13px; }
+  .mandate.revoked { border-color:var(--bad); }
+  .step { border-left:3px solid var(--line); padding:4px 10px; margin:6px 0; }
+  .step b { font-family:ui-monospace,monospace; font-size:12px; }
+  .step pre { margin:4px 0 0; font-size:11px; max-height:110px; overflow:auto; white-space:pre-wrap; color:var(--muted); }
+  .answer { background:var(--chip); border-radius:8px; padding:10px; margin-top:10px; }
+  .card { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; }
+  .status { font-size:12px; font-weight:600; padding:2px 8px; border-radius:99px; background:var(--chip); }
+  .confirmed,.ok { color:var(--ok); } .pending_approval,.warn { color:var(--warn); } .rejected,.bad { color:var(--bad); }
+  .muted { color:var(--muted); font-size:12px; }
+  .log { font-size:12px; border-bottom:1px solid var(--line); padding:6px 0; }
+  .log .who { font-family:ui-monospace,monospace; color:var(--accent); }
+  .hash { font-family:ui-monospace,monospace; font-size:10px; color:var(--muted); }
+  .empty { color:var(--muted); font-style:italic; }
+  .scroll { max-height:68vh; overflow:auto; }
+  ul { margin:6px 0; padding-left:18px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Trusted Trade Agents</h1>
-  <p>External purchasing agent &rarr; open wholesaler interface &rarr; policy &rarr; human approval &rarr; audit trail</p>
+  <h1>AgentGate · Valio Aimo</h1>
+  <p>Any AI agent can order from Valio Aimo, but no agent can break Valio's rules.</p>
 </header>
 <main>
   <section>
     <h2>1 · Buyer's agent</h2>
     <select id="buyer"></select>
-    <div class="policy" id="policy"></div>
+    <div id="mandate" class="mandate"></div>
     <textarea id="msg">I need 1,000 litres of lactose-free milk by Monday. Find an option that meets our requirements based on price and availability.</textarea>
     <div class="row">
       <button id="send">Send to agent</button>
-      <button class="secondary" id="reset">Reset demo</button>
+      <button class="secondary" data-example="24 litres of oat drink barista by Monday">Small order</button>
+      <button class="secondary" data-example="Tarvitsen 1000 litraa laktoositonta maitoa maanantaiksi">Finnish</button>
+      <button class="danger" id="rogue">Misbehaving agent</button>
+      <button class="secondary" id="reset">Reset</button>
     </div>
     <div id="transcript" class="scroll"></div>
   </section>
@@ -67,7 +68,7 @@
     <div id="orders" class="scroll"></div>
   </section>
   <section>
-    <h2>3 · Audit trail</h2>
+    <h2>3 · Audit trail <span id="verify" class="muted"></span></h2>
     <div id="audit" class="scroll"></div>
   </section>
 </main>
@@ -75,6 +76,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let buyers = [];
+const current = () => buyers.find(x => x.buyer_id === $("buyer").value);
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -83,17 +85,34 @@ async function api(path, opts = {}) {
   return body;
 }
 
-function showPolicy() {
-  const b = buyers.find(x => x.id === $("buyer").value);
-  if (!b) return;
-  const p = b.policy;
-  $("policy").textContent = `Agent may order alone up to ${p.auto_approve_limit_eur} € · above that: ${b.approver} approves · hard limit ${p.hard_limit_eur} € · categories: ${p.allowed_categories.join(", ")}`;
+function showMandate() {
+  const m = current(); if (!m) return;
+  $("mandate").className = "mandate" + (m.revoked ? " revoked" : "");
+  $("mandate").innerHTML = `
+    <div class="row" style="justify-content:space-between;margin:0">
+      <b>Mandate ${esc(m.id)} · ${esc(m.agent_name)}</b>
+      <span class="status ${m.revoked ? "bad" : "ok"}">${m.revoked ? "REVOKED" : "active"}</span>
+    </div>
+    <div class="muted">Issued by ${esc(m.issued_by)} · valid until ${esc(m.valid_until)}</div>
+    <ul>
+      <li>Orders alone up to <b>${m.auto_approve_limit_eur} €</b>; above that the ${esc(m.approver)} approves</li>
+      <li>Never above <b>${m.hard_limit_eur} €</b> · categories: ${esc(m.allowed_categories.join(", "))}</li>
+      <li>Quantities over <b>${m.unusual_order_factor}×</b> the usual weekly order need approval</li>
+    </ul>
+    <button class="${m.revoked ? "secondary" : "danger"}" id="toggleMandate">${m.revoked ? "Reinstate mandate" : "Revoke mandate"}</button>`;
+  $("toggleMandate").onclick = async () => {
+    await api(`/api/human/mandates/${m.buyer_id}/${m.revoked ? "reinstate" : "revoke"}`,
+      { method: "POST", body: JSON.stringify({ by: m.approver }) });
+    await loadBuyers(); refresh();
+  };
 }
 
 async function loadBuyers() {
+  const selected = $("buyer").value;
   buyers = await api("/api/demo/buyers");
-  $("buyer").innerHTML = buyers.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
-  showPolicy();
+  $("buyer").innerHTML = buyers.map(b => `<option value="${b.buyer_id}">${esc(b.buyer)}</option>`).join("");
+  if (selected) $("buyer").value = selected;
+  showMandate();
 }
 
 function renderTranscript(r) {
@@ -104,50 +123,59 @@ function renderTranscript(r) {
 }
 
 async function refresh() {
-  const [orders, audit] = await Promise.all([api("/api/demo/orders"), api("/api/demo/audit")]);
+  const [orders, audit, verify] = await Promise.all([api("/api/demo/orders"), api("/api/demo/audit"), api("/api/human/audit/verify")]);
+  $("verify").innerHTML = verify.ok ? `<span class="ok">· chain verified (${verify.entries})</span>` : `<span class="bad">· chain BROKEN at #${verify.broken_at}</span>`;
   $("orders").innerHTML = orders.length ? orders.map(o => `
     <div class="card">
       <div class="row" style="justify-content:space-between;margin:0">
         <b>${esc(o.order_id)} · ${o.total_eur.toFixed(2)} €</b>
         <span class="status ${o.status}">${esc(o.status.replace("_", " "))}</span>
       </div>
-      <div class="muted">${esc(o.buyer_name)} · deliver by ${esc(o.deliver_by || "-")}</div>
+      <div class="muted">${esc(o.buyer_name)} · mandate ${esc(o.mandate_id)} · deliver by ${esc(o.deliver_by || "-")}</div>
       <ul>${o.lines.map(l => `<li>${l.quantity} ${esc(l.unit)} ${esc(l.name)} <span class="muted">(${esc(l.supplier)}, ${l.unit_price_eur} €)</span></li>`).join("")}</ul>
       <div><b>Agent's reason:</b> ${esc(o.agent_reason)}</div>
-      <div class="muted"><b>Policy:</b> ${esc(o.policy.reasons.join(" "))}</div>
+      <div class="muted"><b>Door:</b> ${esc(o.policy.reasons.join(" "))}</div>
       ${o.status === "pending_approval" ? `
+        ${o.approve_by ? `<div class="warn"><b>Approve by ${esc(o.approve_by.replace("T", " "))}</b> to keep delivery date</div>` : ""}
         <input id="note-${o.order_id}" placeholder="Note (optional)">
         <div class="row">
           <button onclick="decide('${o.order_id}', true)">Approve</button>
-          <button class="reject" onclick="decide('${o.order_id}', false)">Reject</button>
+          <button class="danger" onclick="decide('${o.order_id}', false)">Reject</button>
         </div>` : `<div class="muted">Decided by: ${esc(o.decided_by)}${o.decision_note ? " — " + esc(o.decision_note) : ""}</div>`}
+      ${o.warning ? `<div class="warn">${esc(o.warning)}</div>` : ""}
+      ${o.receipt ? `<div class="hash">receipt ${esc(o.receipt.slice(0, 24))}…</div>` : ""}
     </div>`).join("") : `<div class="empty">No orders yet.</div>`;
   $("audit").innerHTML = audit.length ? audit.map(a => `
-    <div class="log"><span class="muted">${esc(a.at.slice(11))}</span> <span class="who">${esc(a.actor)}</span> ${esc(a.summary)}
-      ${a.reason ? `<div class="muted">why: ${esc(a.reason)}</div>` : ""}</div>`).join("") : `<div class="empty">Nothing logged yet.</div>`;
+    <div class="log"><span class="muted">#${a.seq} ${esc(a.at.slice(11))}</span> <span class="who">${esc(a.actor)}</span> ${esc(a.summary)}
+      ${a.reason ? `<div class="muted">why: ${esc(a.reason)}</div>` : ""}
+      <div class="hash">${esc(a.hash.slice(0, 16))}… ← ${esc(a.prev_hash.slice(0, 8))}…</div></div>`).join("")
+    : `<div class="empty">Nothing logged yet.</div>`;
 }
 
 async function decide(orderId, approve) {
-  const b = buyers.find(x => x.id === $("buyer").value);
   try {
     await api(`/api/human/orders/${orderId}/decision`, { method: "POST",
-      body: JSON.stringify({ approve, approver: b ? b.approver : "Manager", note: $("note-" + orderId)?.value || "" }) });
+      body: JSON.stringify({ approve, approver: current()?.approver || "Manager", note: $("note-" + orderId)?.value || "" }) });
   } catch (e) { alert(e.message); }
   refresh();
 }
 
-$("buyer").onchange = showPolicy;
-$("send").onclick = async () => {
-  $("send").disabled = true;
+async function runAgent(path, body) {
+  for (const b of document.querySelectorAll("button")) b.disabled = true;
   $("transcript").innerHTML = `<div class="muted">Agent is working…</div>`;
-  try { renderTranscript(await api("/api/demo/chat", { method: "POST", body: JSON.stringify({ buyer_id: $("buyer").value, message: $("msg").value }) })); }
+  try { renderTranscript(await api(path, { method: "POST", body: JSON.stringify(body) })); }
   catch (e) { $("transcript").innerHTML = `<div class="answer">Error: ${esc(e.message)}</div>`; }
-  $("send").disabled = false;
+  for (const b of document.querySelectorAll("button")) b.disabled = false;
   refresh();
-};
-$("reset").onclick = async () => { await api("/api/demo/reset", { method: "POST" }); $("transcript").innerHTML = ""; refresh(); };
+}
 
-loadBuyers(); refresh(); setInterval(refresh, 3000);
+$("buyer").onchange = showMandate;
+$("send").onclick = () => runAgent("/api/demo/chat", { buyer_id: $("buyer").value, message: $("msg").value });
+$("rogue").onclick = () => runAgent("/api/demo/rogue", { buyer_id: $("buyer").value });
+document.querySelectorAll("[data-example]").forEach(b => b.onclick = () => { $("msg").value = b.dataset.example; });
+$("reset").onclick = async () => { await api("/api/demo/reset", { method: "POST" }); $("transcript").innerHTML = ""; await loadBuyers(); refresh(); };
+
+loadBuyers().then(refresh); setInterval(refresh, 3000);
 </script>
 </body>
 </html>

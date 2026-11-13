@@ -1,48 +1,59 @@
-# Trusted Trade Agents — Junction 2026 (Valio Aimo challenge)
+# AgentGate — Valio Aimo's front door for AI purchasing agents
 
-An open interface through which an **external purchasing agent** can search a food-service
-wholesaler's catalog, get fixed-price quotes and place orders — **within limits the buyer sets**,
-with **human approval** above those limits and a **human-readable audit trail** of every step.
+**Junction 2026 · team STEEL BALL · challenge: Valio Aimo — Trusted Trade Agents**
 
-All wholesaler data is mocked (`data/catalog.json`, `data/buyers.json`).
+> Any AI agent can order from Valio Aimo, but no agent can break Valio's rules.
 
-## Run
+AgentGate is an open interface through which external purchasing agents (a hotel's or restaurant's
+ordering bot) can **look up** products, get **fixed-price quotes** and **place orders** — while the
+**door, not the agent,** enforces the buyer's rules:
+
+- **Agent mandate** — spending limits, allowed categories, validity, and an instant **Revoke** switch
+- **Human approval** above the agent's limit, for substitutes, and for **unusual quantities** vs. the buyer's normal orders
+- **Need-to-know data** — each buyer sees only its own contract prices; no exact stock, no other customers; anti-scraping throttle
+- **Explainable & verifiable** — every order carries the agent's reason; **hash-chained audit log**; receipt per order
+- **Open standards** — REST/OpenAPI + MCP + a discovery file at `/.well-known/agent-interface.json`
+- Works with requests in **English or Finnish**
+
+All Valio Aimo data here is mocked (`data/`).
+
+📄 [Design](docs/DESIGN.md) · 📐 [Agent interface spec v0.1](docs/AGENT_INTERFACE_SPEC.md) · 🗓️ [Weekend plan](docs/PLAN.md)
+
+## Run it
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
+python -m venv venv
+venv\Scripts\activate            # macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+set DEMO_TODAY=2026-11-13        # optional: fixed date for a repeatable demo (macOS/Linux: export ...)
+uvicorn app.main:app --port 8000
 ```
 
-Open http://127.0.0.1:8000 (UI) and http://127.0.0.1:8000/docs (OpenAPI spec of the agent interface).
+- UI: http://127.0.0.1:8000 · API docs: http://127.0.0.1:8000/docs
+- The demo agent uses **Gemini** when `GEMINI_API_KEY` is set (`GEMINI_MODEL`, default `gemini-2.5-flash`),
+  otherwise a deterministic offline planner.
+- MCP (for Claude Desktop, Claude Code, Gemini CLI…): `WHOLESALER_AGENT_KEY=demo-key-aurora python -m app.mcp_server`
 
-- Without an API key the buyer agent uses a small deterministic planner (good for offline demos).
-- With `GEMINI_API_KEY` set it uses Gemini function calling (`GEMINI_MODEL`, default `gemini-2.5-flash`).
-- `DEMO_TODAY=2026-11-13` fixes "today" so the demo is identical every run.
+## Demo in the UI
+1. **Send to agent** — 1,000 L lactose-free milk by Monday → 1,450 € → *needs approval* (over limit, 8.3× usual) → **Approve**
+2. **Finnish** — same request in Finnish, same result
+3. **Small order** — 24 L oat drink → confirmed by the door automatically
+4. **Misbehaving agent** — 10,690 € order and a meat order → both rejected
+5. **Revoke mandate** → the agent's next call is refused
+6. Audit trail header shows **chain verified**
 
-## Demo scenario
-
-"I need 1,000 litres of lactose-free milk by Monday." →
-agent searches → checks 4 options → only one supplier can deliver 1,000 L in time →
-quote 1,450 € → above the hotel's 1,000 € auto-approve limit → **pending approval** →
-kitchen manager approves in the UI → confirmed, stock reserved, every step in the audit trail.
-
-## Pieces
-
-| File | What |
+## Structure
+| Path | What |
 |---|---|
-| `app/core.py` | Catalog, quotes, orders, **policy engine**, audit log |
-| `app/main.py` | Agent API `/api/v1/*` (per-buyer `X-Agent-Key`), human approval `/api/human/*`, demo endpoints |
-| `app/agent.py` | Buyer agent (Gemini tool calling, offline fallback) |
-| `app/mcp_server.py` | Same interface as an MCP server for any MCP agent |
-| `web/index.html` | Agent chat · approvals · audit trail |
-
-Policy per buyer (`data/buyers.json`): auto-approve limit, hard limit, allowed categories,
-max lead time, substitutes need approval.
+| `app/core.py` | The door: catalog, mandate checks, unusual-order guard, quotes, orders, approvals, hash-chained audit |
+| `app/main.py` | HTTP API (`/api/v1` agent, `/api/human`, discovery, demo) |
+| `app/mcp_server.py` | Same operations as MCP tools |
+| `app/agent.py` | Demo buyer agent (Gemini or offline) + misbehaving-agent simulation |
+| `web/index.html` | Mandate card, agent chat, approvals, audit trail |
+| `data/` | Mock catalog and buyers (mandates, contract prices, usual order quantities) |
+| `tests/` | 13 tests covering every rule |
 
 ## Tests
-
 ```bash
 pytest -q
 ```
