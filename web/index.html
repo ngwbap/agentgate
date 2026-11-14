@@ -4,80 +4,109 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Valio Aimo assistant</title>
-<link rel="stylesheet" href="/shared.css">
+<link rel="stylesheet" href="/shared.css?v=3">
 <style>
-  .ask textarea { width: 100%; min-height: 56px; resize: vertical; border: none; padding: 4px 0; font-size: 16px; background: transparent; }
-  .ask textarea:focus { outline: none; }
-  .ask .hint { font-size: 13px; color: var(--muted); margin-top: 4px; }
-  .plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
-  .plan { cursor: pointer; text-align: left; display: block; width: 100%; padding: 12px 14px; border-radius: 14px; white-space: normal; }
-  .plan.sel { border: 2px solid var(--accent); padding: 11px 13px; background: var(--panel); }
-  .plan .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .plan .label { font-size: 12px; font-weight: 600; color: var(--muted); }
-  .plan.sel .label { color: var(--accent); }
-  .plan .price { font-weight: 700; font-size: 17px; }
-  .plan .what { margin: 6px 0 6px; font-size: 14px; }
-  .plan .status { font-size: 13px; display: flex; gap: 6px; align-items: center; }
-  .line { display: flex; gap: 14px; align-items: center; }
-  .line + .line { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
-  .line .name { font-weight: 600; }
-  .line .total { font-weight: 700; min-width: 86px; text-align: right; }
-  .alts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
-  .alts button { font-size: 12.5px; padding: 3px 10px; border-radius: 99px; }
-  .checkout { display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; box-shadow: 0 6px 24px rgba(0,0,0,.08); }
-  @media (min-height: 860px) { .checkout { position: sticky; bottom: 12px; } }
-  .checkout .sum { font-size: 20px; font-weight: 700; }
-  .crit { margin-top: 12px; }
-  .crit .fields { display: grid; grid-template-columns: 2fr 1.4fr 1fr 1fr; gap: 10px; }
-  @media (max-width: 720px) { .crit .fields { grid-template-columns: 1fr 1fr; } }
-  .crit label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-  .crit .group { margin-top: 14px; }
-  .crit .group > .t { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-  .tick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 5px 11px; border-radius: 99px; border: 1px solid var(--line-strong);
-    cursor: pointer; margin: 0 6px 6px 0; user-select: none; background: var(--panel); }
+  /* The request is the hero: what the kitchen needs, in its own words. */
+  .ask { margin-top: 28px; border-radius: 16px; padding: 20px 22px 16px; border: 1px solid var(--line-strong); }
+  .ask label.q { display: block; font-size: 26px; font-weight: 800; font-variation-settings: "wdth" 112; letter-spacing: -.015em; margin-bottom: 8px; }
+  .ask textarea { width: 100%; min-height: 64px; resize: vertical; border: none; padding: 2px 0; font-size: 19px; line-height: 1.45; background: transparent; }
+  .ask textarea::placeholder { color: var(--faint); }
+  .ask textarea:focus-visible { outline: none; }
+  .ask:focus-within { border-color: var(--accent); }
+  .ask .foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line); margin-top: 10px; padding-top: 12px; }
+  .ask .hint { font-size: 13px; color: var(--muted); max-width: 52ch; }
+  #mic { border-radius: 99px; padding: 8px 16px; }
+  #mic.on { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
+
+  /* Criteria: the boxes the agent will obey. Groups sit side by side on wide screens. */
+  .crit { margin-top: 12px; padding: 18px 20px; }
+  .crit .fields { display: grid; grid-template-columns: 2fr 1.4fr 1fr 1fr; gap: 12px; }
+  .crit label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); font-weight: 500; }
+  .crit .groups { display: grid; grid-template-columns: 1fr 1.35fr 1fr; gap: 6px 22px; margin-top: 16px; }
+  .crit .group > .t { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
+  .crit .group > .t .faint { font-weight: 400; }
+  .crit .wide { grid-column: 1 / -1; }
+  @media (max-width: 820px) { .crit .fields { grid-template-columns: 1fr 1fr; } .crit .groups { grid-template-columns: 1fr; } }
+  .tick { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; padding: 5px 11px; border-radius: 4px; border: 1px solid var(--line-strong);
+    cursor: pointer; margin: 0 6px 6px 0; user-select: none; background: var(--paper); }
   .tick input { margin: 0; accent-color: var(--accent); }
-  .tick.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .tick.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .req { color: var(--bad); }
   .wishes { margin: 0 0 6px; padding-left: 18px; font-size: 14px; }
-  #mic.on { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
+  .crit .go { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line);
+    margin-top: 14px; padding-top: 14px; }
+  #find { padding: 10px 26px; font-size: 16px; }
+
+  /* Plans: the status band is the one loud element. Green = Valio's own stock, amber = not guaranteed. */
+  .plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .plan { cursor: pointer; padding: 0; overflow: hidden; border-radius: 10px; border: 1px solid var(--line); }
+  .plan:hover { border-color: var(--line-strong); }
+  .plan.sel { border: 2px solid var(--accent); }
+  .plan .band { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 13px; font-weight: 600; }
+  .plan .band.ok { background: var(--ok-soft); color: var(--ok); }
+  .plan .band.warn { background: var(--warn-soft); color: var(--warn); }
+  .plan .body { padding: 12px 14px 12px; }
+  .plan .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .plan .label { font-size: 20px; font-weight: 800; font-variation-settings: "wdth" 115; letter-spacing: -.01em; }
+  .plan.sel .label { color: var(--accent); }
+  .plan .price { font-weight: 800; font-size: 20px; font-variation-settings: "wdth" 108; }
+  .plan .what { margin: 6px 0 2px; font-size: 14px; color: var(--muted); min-height: 42px; }
+  .plan .note { font-size: 12.5px; color: var(--muted); }
+  .badge-top { margin-top: 6px; font-size: 12px; cursor: pointer; }
   .stars { white-space: nowrap; letter-spacing: 1px; font-size: 14px; }
+  .stars + b { display: inline-block; min-width: 2.1em; text-align: right; font-variant-numeric: tabular-nums; }
+  .crit-row > span:first-child { flex: 1; text-align: left; }
   .st { color: var(--line-strong); position: relative; display: inline-block; }
-  .st.on { color: #e6a23c; }
-  .st.half::before { content: "★"; position: absolute; left: 0; top: 0; width: 50%; overflow: hidden; color: #e6a23c; }
-  .rating { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
-  .crit-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12.5px; padding: 2px 6px; border-radius: 6px;
-    background: none; border: none; width: 100%; color: var(--ink); }
-  .crit-row:hover, .crit-row.on { background: var(--soft); }
-  .crit-row.inline { width: auto; border: 1px solid var(--line); border-radius: 99px; padding: 2px 10px; }
-  .explain { display: block; background: var(--soft); border-radius: 12px; padding: 10px 14px; margin-top: 10px; font-size: 14px; }
-  .demo { border: 1px dashed var(--line-strong); border-radius: 12px; padding: 10px 12px; margin-top: 18px; font-size: 13px; }
+  .st.on { color: var(--star); }
+  .st.half::before { content: "★"; position: absolute; left: 0; top: 0; width: 50%; overflow: hidden; color: var(--star); }
+  .rating { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 6px; }
+  .crit-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; padding: 3px 6px; border-radius: 4px;
+    background: none; border: none; width: 100%; color: var(--ink); font-weight: 400; }
+  .crit-row:hover, .crit-row.on { background: var(--ice-2); }
+  .crit-row.inline { width: auto; border: 1px solid var(--line); padding: 2px 10px; }
+  .explain { display: block; background: var(--ice-2); border-left: 4px solid var(--accent); border-radius: 0; padding: 12px 16px; margin-top: 12px; font-size: 14px; max-width: 80ch; }
+
+  /* The draft order reads like a delivery docket: rows, hairlines, totals lined up on the right. */
+  .docket { padding: 4px 18px; border-radius: 10px 10px 0 0; border-bottom: none; }
+  .line { display: grid; grid-template-columns: 64px 1fr auto 110px; gap: 16px; align-items: center; padding: 16px 0; }
+  .line + .line { border-top: 1px dashed var(--line-strong); }
+  .line .name { font-weight: 700; font-size: 16px; }
+  .line .meta { color: var(--faint); font-size: 12.5px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .line .total { font-weight: 800; text-align: right; font-size: 17px; }
+  @media (max-width: 720px) { .line { grid-template-columns: 52px 1fr; } .line .qty, .line .total { grid-column: 2; text-align: left; } }
+  .alts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .alts button { font-size: 12.5px; padding: 3px 10px; border-radius: 4px; font-weight: 400; }
+  .checkout { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 0;
+    border-radius: 0 0 10px 10px; border-top: 3px solid var(--fjord); }
+  @media (min-height: 860px) { .checkout { position: sticky; bottom: 12px; box-shadow: 0 -2px 0 var(--frost); } }
+  .checkout .sum { font-size: 24px; font-weight: 800; font-variation-settings: "wdth" 110; }
+  .demo { border: 1px dashed var(--line-strong); border-radius: 8px; padding: 10px 12px; margin-top: 24px; font-size: 13px; }
   .funnel span { white-space: nowrap; }
 </style>
 </head>
 <body>
+<header class="bar"><div class="in">
+  <div class="brand">Valio Aimo<small>buying assistant</small></div>
+  <div class="right">
+    <select id="buyer" aria-label="Customer"></select>
+    <a class="btn" id="ordersLink" href="/orders" target="agentgate-orders">Orders <span class="count" id="waiting" hidden></span></a>
+  </div>
+</div></header>
 <div class="wrap">
-  <header class="top">
-    <div class="brand">Valio Aimo <span>· buying assistant</span></div>
-    <div class="right">
-      <select id="buyer" aria-label="Customer"></select>
-      <a class="btn" id="ordersLink" href="/orders" target="agentgate-orders">Orders <span class="count" id="waiting" hidden></span></a>
-    </div>
-  </header>
-
   <div class="card ask">
-    <textarea id="msg" placeholder="I need 1,000 litres of lactose-free milk by Monday, max 1,200 €. Deliver to the back door."></textarea>
-    <div class="row" style="justify-content:space-between">
-      <div class="hint">Write or say it in your own words (English or Finnish), or just fill in the boxes below.</div>
+    <label class="q" for="msg">What does your kitchen need?</label>
+    <textarea id="msg" placeholder="1,000 litres of lactose-free milk by Monday, max 1,200 €. Deliver to the back door."></textarea>
+    <div class="foot">
+      <div class="hint">Write or say it in English or Finnish. I'll turn it into the boxes below, or fill them in yourself.</div>
       <div class="row">
         <span id="voice" class="row" hidden>
-          <select id="voiceLang" aria-label="Speech language" style="padding:6px 8px"><option value="en-GB">EN</option><option value="fi-FI">FI</option></select>
+          <select id="voiceLang" aria-label="Speech language" style="padding:7px 8px"><option value="en-GB">English</option><option value="fi-FI">Suomi</option></select>
           <button id="mic" aria-label="Speak your request">🎤 Speak</button>
         </span>
         <button id="fill">Fill in from my request</button>
       </div>
     </div>
   </div>
-
   <div class="card crit" id="criteria"></div>
 
   <div id="status" style="margin-top:14px"></div>
@@ -125,7 +154,10 @@ async function api(path, opts = {}) {
 }
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
-function icon(o) { return o && o.content_unit === "KG" ? "🧺" : o && o.content_unit === "PCS" ? "📦" : "🥛"; }
+function icon(o) {      // shelf-label tile: the real pack size instead of a stock photo
+  if (!o || !o.content_per_sales_unit) return `<b>${esc((o && o.sales_unit) || "")}</b>`;
+  return `<b>${num(o.content_per_sales_unit)} ${esc(o.content_unit === "PCS" ? "pcs" : o.content_unit)}</b><small>per ${esc(o.sales_unit)}</small>`;
+}
 function stock(o) {
   const cls = o.status === "in_stock" ? "ok" : (o.status === "partial" || o.status === "supplier") ? "warn" : "bad";
   return `<span class="dot ${cls}"></span>${esc(o.available_units_text)}`;
@@ -155,18 +187,20 @@ function renderCriteria() {
       <label class="f">Deliver by<input type="date" value="${crit.deliver_by || ""}" onchange="crit.deliver_by = this.value || null"></label>
       <label class="f">Budget (€)<input type="number" min="0" step="any" value="${crit.budget_eur ?? ""}" placeholder="No limit" onchange="crit.budget_eur = this.value ? Number(this.value) : null"></label>
     </div>
-    <div class="group"><div class="t">Must be</div>${claims.map(c => tick(it.must_claims.includes(c), CLAIMS[c] || c.toLowerCase().replace(/_/g, " "), `toggle('must_claims','${c}')`)).join("")}</div>
-    <div class="group"><div class="t">Avoid</div>${allergens.map(a => tick(it.exclude_allergens.includes(a), cap(ALLERGENS[a] || a), `toggle('exclude_allergens','${a}')`)).join("")}
-      ${tick(it.strict_allergens, "Strict allergy check (school, daycare, hospital)", "cur().strict_allergens = !cur().strict_allergens; renderCriteria()")}
-      <button class="ghost small" onclick="more = !more; renderCriteria()">${more ? "Fewer options" : "More options"}</button></div>
-    <div class="group"><div class="t">Prefer</div>${tick(fin, "Finnish", "togglePref('finnish')")}${tick(org, "Organic", "togglePref('organic')")}</div>
-    <div class="group"><div class="t">What matters most <span class="faint">· tick any; they count equally and each gets a star rating${prios.length ? "" : " · none ticked, so price counts"}</span></div>
-      ${Object.entries(PRIORITY).map(([k, v]) => tick(prios.includes(k), v, `setPrio('${k}')`)).join("")}</div>
-    <div class="group"><div class="t">Other wishes <span class="faint">· not a search filter; sent with the order so the approver sees it</span></div>
-      <ul class="wishes">${crit.other_wishes.map((w, i) => `<li>${esc(w)} <button class="ghost small" aria-label="Remove wish" onclick="crit.other_wishes.splice(${i}, 1); renderCriteria()">✕</button></li>`).join("")}</ul>
-      <input id="c_wish" placeholder="Add a wish and press Enter, e.g. deliver to the back door" style="width:100%" onkeydown="if (event.key === 'Enter') addWish(this.value)"></div>
+    <div class="groups">
+      <div class="group"><div class="t">Must be</div>${claims.map(c => tick(it.must_claims.includes(c), CLAIMS[c] || c.toLowerCase().replace(/_/g, " "), `toggle('must_claims','${c}')`)).join("")}</div>
+      <div class="group"><div class="t">Avoid</div>${allergens.map(a => tick(it.exclude_allergens.includes(a), cap(ALLERGENS[a] || a), `toggle('exclude_allergens','${a}')`)).join("")}
+        ${tick(it.strict_allergens, "Strict allergy check (school, daycare, hospital)", "cur().strict_allergens = !cur().strict_allergens; renderCriteria()")}
+        <button class="ghost small" onclick="more = !more; renderCriteria()">${more ? "Fewer options" : "More options"}</button></div>
+      <div class="group"><div class="t">Prefer</div>${tick(fin, "Finnish", "togglePref('finnish')")}${tick(org, "Organic", "togglePref('organic')")}</div>
+      <div class="group wide"><div class="t">What matters most <span class="faint">Tick any. They count equally and each gets a star rating${prios.length ? "." : ". With none ticked, price counts."}</span></div>
+        ${Object.entries(PRIORITY).map(([k, v]) => tick(prios.includes(k), v, `setPrio('${k}')`)).join("")}</div>
+      <div class="group wide"><div class="t">Other wishes <span class="faint">Not a search filter. They travel with the order so the approver sees them.</span></div>
+        <ul class="wishes">${crit.other_wishes.map((w, i) => `<li>${esc(w)} <button class="ghost small" aria-label="Remove wish" onclick="crit.other_wishes.splice(${i}, 1); renderCriteria()">✕</button></li>`).join("")}</ul>
+        <input id="c_wish" placeholder="Add a wish and press Enter, for example: deliver to the back door" style="width:100%" onkeydown="if (event.key === 'Enter') addWish(this.value)"></div>
+    </div>
     <div id="c_err" style="color:var(--bad);font-size:13px;margin-top:8px"></div>
-    <div class="row" style="justify-content:space-between;margin-top:12px"><span class="faint">Only the product is required. Change anything before you search.</span>
+    <div class="go"><span class="muted">Only the product is required. Change anything before you search.</span>
       <div class="row"><button class="ghost" onclick="clearCriteria()">Clear</button><button class="primary" id="find" onclick="find()">Find</button></div></div>`;
 }
 function setLabel(v) {
@@ -271,6 +305,16 @@ function planWhat(p) {
   return `${l.length} products, split`;
 }
 function shortName(n) { return n.length > 38 ? n.slice(0, 36) + "…" : n; }
+function planBand(p) {
+  if (p.confidence === "confirmed") return `<div class="band ok"><span class="dot ok"></span>In Valio stock, confirmed</div>`;
+  if (p.confidence === "partly confirmed") return `<div class="band warn"><span class="dot warn"></span>Partly in Valio stock</div>`;
+  return `<div class="band warn"><span class="dot warn"></span>Supplier stock, not guaranteed</div>`;
+}
+function planNote(p) {
+  if (p.lines.every(l => l.match === "exact")) return "";
+  const kind = p.lines.some(l => l.match === "substitute") ? "Includes a substitute" : "Includes a close variant";
+  return `<div class="note">${kind}${p.lines.some(l => l.valio_pick && l.match !== "exact") ? ", Valio's pick ★" : ""}</div>`;
+}
 function planStatus(p) {
   const exact = p.lines.every(l => l.match === "exact");
   const valio = p.lines.some(l => l.valio_pick && l.match !== "exact") ? " · ★ Valio's pick" : "";
@@ -284,19 +328,20 @@ function plansHtml(r) {
   const ep = explain && r.plans[explain.j];
   const ex = ep && (explain.k === "_top" ? { name: "Why it's highest rated", stars: ep.rating_stars, why: ep.highest_rated_why } : ep.ratings[explain.k]);
   return `<h2>${r.plans.length === 1 ? "The way to get it" : r.plans.length + " ways to get it"}</h2><div class="plans">${r.plans.map((p, j) => `
-    <div class="card plan ${j === planIdx ? "sel" : ""}" role="button" tabindex="0" onclick="selectPlan(${j})" style="cursor:pointer">
+    <div class="card plan ${j === planIdx ? "sel" : ""}" role="button" tabindex="0" onclick="selectPlan(${j})" onkeydown="if (event.key === 'Enter') selectPlan(${j})">
+      ${planBand(p)}<div class="body">
       <div class="top"><span class="label">${esc(p.label)}</span><span class="price">${eur(p.total_eur)}</span></div>
-      ${p.highest_rated ? `<button class="pill ${explain && explain.j === j && explain.k === "_top" ? "accent" : "ok"}" style="margin-top:6px;font-size:12px;cursor:pointer"
+      ${p.highest_rated ? `<button class="pill badge-top ${explain && explain.j === j && explain.k === "_top" ? "accent" : "ok"}"
           onclick="event.stopPropagation(); toggleExplain(${j}, '_top')" title="Why?">★ Highest rated <span class="faint">ⓘ</span></button>` : ""}
       <div class="what">${planWhat(p)}</div>
-      <div class="status">${planStatus(p)}</div>
+      ${planNote(p)}
       ${p.over_budget ? `<div class="faint" style="color:var(--bad);margin-top:4px">Over your budget</div>` : ""}
       ${p.rating_stars != null && p.criteria.length ? `<div class="rating">
         <div class="crit-row" style="font-weight:600"><span>Overall</span>${starRow(p.rating_stars)}</div>
         ${p.criteria.map(k => `<button class="crit-row ${explain && explain.j === j && explain.k === k ? "on" : ""}" title="Why?"
             onclick="event.stopPropagation(); toggleExplain(${j}, '${k}')"><span>${esc(p.ratings[k].name)} <span class="faint">ⓘ</span></span>${starRow(p.ratings[k].stars)}</button>`).join("")}
       </div>` : ""}
-    </div>`).join("")}</div>
+    </div></div>`).join("")}</div>
     ${ex ? `<div class="explain"><b>${esc(r.plans[explain.j].label)} · ${esc(ex.name)}${ex.stars != null ? ": " + ex.stars.toFixed(1) + "★" : ""}</b>
       <button class="ghost small" style="float:right" onclick="explain=null;render()" aria-label="Close">✕</button><div style="margin-top:4px">${esc(ex.why)}</div></div>` : ""}`;
 }
@@ -317,7 +362,7 @@ function valioNote(o) {
 function draftHtml(r) {
   if (!draft.length) return "";
   const unit = r.item.unit;
-  return `<h2>Your draft order</h2><div class="card">${draft.map((d, k) => {
+  return `<h2>Your draft order</h2><div class="card docket">${draft.map((d, k) => {
     const o = opt(d.product_id) || {};
     const content = (o.content_per_sales_unit || 0) * d.units;
     const vat = o.tax_rate != null && o.comparison_price_eur ? ` · ${eur(o.comparison_price_eur * (1 + o.tax_rate / 100))} with VAT` : "";
@@ -326,7 +371,7 @@ function draftHtml(r) {
       <div class="thumb">${icon(o)}</div>
       <div class="grow">
         <div class="name">${esc(o.name)}</div>
-        <div class="faint">${esc(o.product_id)}${o.brand ? " · " + esc(o.brand) : ""}${o.origin ? " · " + esc(o.origin) : ""}${o.labels && o.labels.length ? " · " + esc(o.labels[0]) : ""}</div>
+        <div class="meta"><span>No. ${esc(o.product_id)}</span>${o.brand ? `<span>${esc(o.brand)}</span>` : ""}${o.origin ? `<span>Origin ${esc(o.origin)}</span>` : ""}${o.labels && o.labels.length ? `<span>${esc(o.labels[0])}</span>` : ""}</div>
         <div class="row" style="gap:6px;font-size:13px;margin-top:2px">${stock(o)}</div>
         <div style="font-size:14px;margin-top:2px"><b>${eur(o.comparison_price_eur || o.unit_price_eur)}</b> / ${esc(o.comparison_price_eur ? unit : o.sales_unit)}<span class="faint">${vat}</span></div>
         ${(o.criteria || []).length ? `<div class="row" style="gap:6px;margin-top:6px">${o.criteria.map(c =>
@@ -339,7 +384,7 @@ function draftHtml(r) {
           ${o.contains_allergens && o.contains_allergens.length ? `<li><b>contains:</b> ${esc(o.contains_allergens.join(", "))}</li>` : ""}
           ${o.may_contain_allergens && o.may_contain_allergens.length ? `<li><b>may contain:</b> ${esc(o.may_contain_allergens.join(", "))}</li>` : ""}</ul></details>
       </div>
-      <div style="text-align:center">
+      <div class="qty" style="text-align:center">
         <div class="stepper"><button onclick="step(${k},-1)" aria-label="Less">−</button><input type="number" min="0" value="${d.units}" onchange="setUnits(${k}, this.value)" aria-label="Quantity"><button onclick="step(${k},1)" aria-label="More">+</button></div>
         <div class="faint" style="margin-top:4px">${esc(o.sales_unit)}${content ? " · " + num(content) + " " + esc(unit) : ""}</div>
       </div>
@@ -363,15 +408,15 @@ function checkoutHtml() {
     const tags = (pv.tags || []).map(t => `<span class="pill ${pv.decision === "blocked" ? "bad" : "warn"}">${esc(t.text)}</span>`).join("");
     if (pv.decision === "blocked") { verdict = `<div style="color:var(--bad);font-size:14px">Can't be ordered: ${esc(pv.reasons.join(" "))}</div><div class="row" style="margin-top:4px">${tags}</div>`; }
     else if (pv.decision === "needs_human_approval") {
-      verdict = `<div class="muted">${esc(pv.approver)} will approve · price held until ${held}</div><div class="row" style="margin-top:4px">${tags}</div>`;
+      verdict = `<div class="muted">${esc(pv.approver)} will approve. Price held until ${held}.</div><div class="row" style="margin-top:4px">${tags}</div>`;
       action = `<button class="primary" onclick="send()">Send for approval</button>`;
     } else {
-      verdict = `<div style="color:var(--ok);font-size:14px">Within your rules, the agent can order this now · price held until ${held}</div>`;
+      verdict = `<div style="color:var(--ok);font-size:14px">Within your rules, so the agent can order this now. Price held until ${held}.</div>`;
       action = `<button class="primary" onclick="send()">Place order</button>`;
     }
   }
   const total = quote && !quote.error ? quote.total_eur : local;
-  return `<div class="card checkout" style="margin-top:16px"><div class="grow"><div class="sum">Total ${eur(total)} <span class="faint" style="font-weight:400">excl. VAT</span></div>${short}${verdict}</div>${action}</div>`;
+  return `<div class="card checkout"><div class="grow"><div class="sum">Total ${eur(total)} <span class="faint" style="font-weight:400;font-variation-settings:'wdth' 100">excl. VAT</span></div>${short}${verdict}</div>${action}</div>`;
 }
 
 // ------------------------------------------------------------------ draft editing

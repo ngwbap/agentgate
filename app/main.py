@@ -343,4 +343,4 @@ def orders_page():
 
 @app.get("/shared.css", include_in_schema=False)
 def shared_css():
-    return FileResponse(WEB_DIR / "shared.css", media_type="text/css")
+    return FileResponse(WEB_DIR / "shared.css", media_type="text/css", headers={"Cache-Control": "no-cache"})

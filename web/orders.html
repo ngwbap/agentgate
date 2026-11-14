@@ -4,14 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Valio Aimo orders</title>
-<link rel="stylesheet" href="/shared.css">
+<link rel="stylesheet" href="/shared.css?v=3">
 <style>
-  .order { margin-bottom: 12px; }
-  .order.waiting { border-color: var(--warn-dot); }
-  .order .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .order .lines { margin: 10px 0; }
-  .order .ln { display: flex; gap: 10px; align-items: center; font-size: 14px; padding: 4px 0; }
-  .order .ln .amt { font-weight: 600; white-space: nowrap; }
+  /* Each order is a docket waiting to be signed: amber edge while it waits for a person. */
+  .order { margin-bottom: 14px; padding: 16px 18px; border-left: 5px solid var(--line-strong); border-radius: 0 10px 10px 0; }
+  .order.waiting { border-left-color: var(--warn-dot); }
+  .order .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .order .head b { font-size: 20px; font-weight: 800; font-variation-settings: "wdth" 112; font-variant-numeric: tabular-nums; }
+  .order .lines { margin: 12px 0; border-top: 1px dashed var(--line-strong); border-bottom: 1px dashed var(--line-strong); }
+  .order .ln { display: flex; gap: 12px; align-items: center; font-size: 14.5px; padding: 8px 0; }
+  .order .ln + .ln { border-top: 1px solid var(--line); }
+  .order .ln .amt { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .order .ln input { width: 80px; }
   .actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
   .log { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
@@ -29,12 +32,12 @@
 </style>
 </head>
 <body>
-<div class="wrap" style="max-width:760px">
-  <header class="top">
-    <div class="brand">Valio Aimo <span>· orders</span></div>
-    <div class="right"><select id="buyer" aria-label="Customer"></select></div>
-  </header>
-  <div class="muted" id="who"></div>
+<header class="bar"><div class="in" style="max-width:800px">
+  <div class="brand">Valio Aimo<small>orders and approvals</small></div>
+  <div class="right"><select id="buyer" aria-label="Customer"></select></div>
+</div></header>
+<div class="wrap" style="max-width:800px">
+  <div class="muted" id="who" style="margin-top:18px"></div>
   <div class="tabs" role="tablist">
     <button data-tab="waiting" class="on">Waiting <span class="count" id="nWaiting" hidden></span></button>
     <button data-tab="done">Done</button>
@@ -49,7 +52,8 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const eur = (v) => v == null ? "–" : v.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
-const dateText = (iso) => iso ? new Date(iso.slice(0, 10) + "T12:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "–";
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const dateText =(iso) => iso ? new Date(iso.slice(0, 10) + "T12:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "–";
 const STATUS = { pending_approval: ["warn", "Waiting for you"], confirmed: ["ok", "Confirmed"], rejected: ["bad", "Rejected"], cancelled: ["", "Withdrawn"] };
 const TAG_ICON = { money: "💶", quantity: "📦", delivery: "🚚", substitute: "🔁", agent: "🤖", settings: "✋", food: "⛔" };
 
@@ -77,9 +81,9 @@ function orderCard(o) {
   const [cls, label] = STATUS[o.status] || ["", o.status];
   const waiting = o.status === "pending_approval", editing = editingOrder === o.order_id;
   const lines = o.lines.map((l, k) => `<div class="ln">
-      <div class="thumb sm">${l.content_unit === "KG" ? "🧺" : "🥛"}</div>
+      <div class="thumb sm">${l.content && l.quantity ? `<b>${(l.content / l.quantity).toLocaleString("en-GB", { maximumFractionDigits: 1 })} ${esc(l.content_unit)}</b><small>per ${esc(l.unit)}</small>` : `<b>${esc(l.unit)}</b>`}</div>
       <div class="grow">${editing ? `<input type="number" min="0" value="${l.quantity}" data-k="${k}" aria-label="Quantity">` : `<b>${l.quantity}</b>`} × ${esc(l.name)}
-        <div class="faint">${esc(l.unit)}${l.content ? ` · ${l.content} ${esc(l.content_unit)}` : ""} · ${l.stock_source === "supplier" ? "from the supplier" : "Valio stock"}${l.price_basis ? " · " + esc(l.price_basis) : ""}</div></div>
+        <div class="faint" style="display:flex;gap:12px;flex-wrap:wrap">${l.content ? `<span>${Math.round(l.content).toLocaleString("en-GB")} ${esc(l.content_unit)} in ${esc(l.unit)}</span>` : ""}<span>${l.stock_source === "supplier" ? "From the supplier" : "Valio stock"}</span>${l.price_basis ? `<span>${esc(cap(l.price_basis))}</span>` : ""}</div></div>
       <div class="amt">${eur(l.line_total_eur)}</div></div>`).join("");
   let foot = "";
   if (waiting && editing) {
@@ -105,7 +109,7 @@ function orderCard(o) {
       ${o.warning ? `<div class="faint" style="color:var(--warn)">${esc(o.warning)}</div>` : ""}`;
   }
   return `<div class="card order ${waiting ? "waiting" : ""}">
-    <div class="head"><div><b>${esc(o.order_id)} · ${eur(o.total_eur)}</b> <span class="faint">· delivery ${dateText(o.deliver_by)}</span></div>
+    <div class="head"><div><b>${eur(o.total_eur)}</b> <span class="faint" style="margin-left:8px">Order ${esc(o.order_id)}, delivery ${dateText(o.deliver_by)}</span></div>
       <span class="pill ${cls}">${label}</span></div>
     <div class="lines">${lines}</div>${foot}</div>`;
 }
