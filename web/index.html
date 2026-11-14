@@ -40,6 +40,16 @@
   .req { color: var(--bad); }
   .wishes { margin: 0 0 6px; padding-left: 18px; font-size: 14px; }
   #mic.on { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
+  .stars { white-space: nowrap; letter-spacing: 1px; font-size: 14px; }
+  .st { color: var(--line-strong); position: relative; display: inline-block; }
+  .st.on { color: #e6a23c; }
+  .st.half::before { content: "★"; position: absolute; left: 0; top: 0; width: 50%; overflow: hidden; color: #e6a23c; }
+  .rating { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
+  .crit-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12.5px; padding: 2px 6px; border-radius: 6px;
+    background: none; border: none; width: 100%; color: var(--ink); }
+  .crit-row:hover, .crit-row.on { background: var(--soft); }
+  .crit-row.inline { width: auto; border: 1px solid var(--line); border-radius: 99px; padding: 2px 10px; }
+  .explain { display: block; background: var(--soft); border-radius: 12px; padding: 10px 14px; margin-top: 10px; font-size: 14px; }
   .demo { border: 1px dashed var(--line-strong); border-radius: 12px; padding: 10px 12px; margin-top: 18px; font-size: 13px; }
   .funnel span { white-space: nowrap; }
 </style>
@@ -92,7 +102,8 @@ const CLAIMS = { FREE_FROM_LACTOSE: "Lactose-free", FREE_FROM_GLUTEN: "Gluten-fr
   LOW_LACTOSE: "Low-lactose", VEGETARIAN: "Vegetarian", FREE_FROM_SOY: "Soy-free", NO_ADDED_SUGARS: "No added sugar" };
 const ALLERGENS = { AM: "milk", AW: "gluten", AE: "egg", AP: "peanuts", AN: "tree nuts", SH: "hazelnut", AY: "soy", AF: "fish",
   AS: "sesame", AC: "crustaceans", UM: "molluscs", BC: "celery", BM: "mustard", NL: "lupin", AU: "sulphites" };
-const PRIORITY = { price: "Cheapest", reliability: "Most reliable", low_co2: "Lowest CO₂" };
+const PRIORITY = { price: "Price", reliability: "Reliability", low_co2: "Carbon footprint" };
+let explain = null, lineExplain = null;      // which criterion's reasoning is open (plan card / product)
 const FINNISH = ["GOODS_FROM_FINLAND_BLUE_SWAN", "MADE_IN_FINLAND_FLAG_WITH_KEY", "FINNISH_HEART_SYMBOL"], ORGANIC = ["EU_ORGANIC_FARMING"];
 const MAIN_CLAIMS = ["FREE_FROM_LACTOSE", "FREE_FROM_GLUTEN", "VEGAN", "FREE_FROM_EGGS"], MAIN_ALLERGENS = ["AM", "AW", "AE", "AP", "AN", "SH"];
 
@@ -134,7 +145,7 @@ function renderCriteria() {
   const allergens = [...new Set([...MAIN_ALLERGENS, ...(more ? Object.keys(ALLERGENS) : []), ...it.exclude_allergens])];
   const fin = it.preferred_labels.some(l => FINNISH.includes(l)) || crit.priorities.includes("finnish_origin");
   const org = it.preferred_labels.some(l => ORGANIC.includes(l)) || crit.priorities.includes("organic");
-  const prio = Object.keys(PRIORITY).find(p => crit.priorities[0] === p) || "price";
+  const prios = crit.priorities.filter(p => p in PRIORITY);
   $("criteria").innerHTML = `${fillInfo ? `<div class="banner" style="background:var(--soft);margin-bottom:12px;font-size:13px">${fillInfo}</div>` : ""}${items}
     <div class="fields">
       <label class="f"><span>Product <span class="req">*</span></span><input value="${esc(it.label)}" placeholder="lactose-free milk" onchange="setLabel(this.value)"></label>
@@ -148,9 +159,9 @@ function renderCriteria() {
     <div class="group"><div class="t">Avoid</div>${allergens.map(a => tick(it.exclude_allergens.includes(a), cap(ALLERGENS[a] || a), `toggle('exclude_allergens','${a}')`)).join("")}
       ${tick(it.strict_allergens, "Strict allergy check (school, daycare, hospital)", "cur().strict_allergens = !cur().strict_allergens; renderCriteria()")}
       <button class="ghost small" onclick="more = !more; renderCriteria()">${more ? "Fewer options" : "More options"}</button></div>
-    <div class="group"><div class="t">Prefer</div>${tick(fin, "Finnish", "togglePref('finnish')")}${tick(org, "Organic", "togglePref('organic')")}
-      <span class="faint" style="margin:0 6px 0 4px">What matters most:</span>${Object.entries(PRIORITY).map(([k, v]) =>
-        `<label class="tick ${prio === k ? "on" : ""}"><input type="radio" name="prio" ${prio === k ? "checked" : ""} onchange="setPrio('${k}')">${v}</label>`).join("")}</div>
+    <div class="group"><div class="t">Prefer</div>${tick(fin, "Finnish", "togglePref('finnish')")}${tick(org, "Organic", "togglePref('organic')")}</div>
+    <div class="group"><div class="t">What matters most <span class="faint">· tick any; they count equally and each gets a star rating${prios.length ? "" : " · none ticked, so price counts"}</span></div>
+      ${Object.entries(PRIORITY).map(([k, v]) => tick(prios.includes(k), v, `setPrio('${k}')`)).join("")}</div>
     <div class="group"><div class="t">Other wishes <span class="faint">· not a search filter; sent with the order so the approver sees it</span></div>
       <ul class="wishes">${crit.other_wishes.map((w, i) => `<li>${esc(w)} <button class="ghost small" aria-label="Remove wish" onclick="crit.other_wishes.splice(${i}, 1); renderCriteria()">✕</button></li>`).join("")}</ul>
       <input id="c_wish" placeholder="Add a wish and press Enter, e.g. deliver to the back door" style="width:100%" onkeydown="if (event.key === 'Enter') addWish(this.value)"></div>
@@ -171,7 +182,17 @@ function togglePref(kind) {
   } else it.preferred_labels = [...new Set([...it.preferred_labels, ...labels])];
   renderCriteria();
 }
-function setPrio(k) { crit.priorities = [k, ...crit.priorities.filter(p => !(p in PRIORITY))]; renderCriteria(); }
+function setPrio(k) {
+  crit.priorities = crit.priorities.includes(k) ? crit.priorities.filter(p => p !== k) : [...crit.priorities, k];
+  renderCriteria();
+}
+function starRow(n) {
+  let s = "";
+  for (let i = 1; i <= 5; i++) s += `<span class="st ${n >= i ? "on" : n >= i - 0.5 ? "half" : ""}">★</span>`;
+  return `<span class="stars" aria-label="${n} out of 5 stars">${s}</span> <b style="font-size:13px">${n.toFixed(1)}</b>`;
+}
+function toggleExplain(j, k) { explain = explain && explain.j === j && explain.k === k ? null : { j, k }; render(); }
+function toggleLineExplain(pid, k) { const key = pid + ":" + k; lineExplain = lineExplain === key ? null : key; render(); }
 function addWish(v) { if (v.trim()) crit.other_wishes.push(v.trim()); renderCriteria(); $("c_wish").focus(); }
 function clearCriteria() { crit = blankNeed(); ci = 0; fillInfo = ""; renderCriteria(); }
 function setBusy(on, text) {
@@ -210,7 +231,7 @@ async function find() {
   try {
     const r = await post("/api/demo/lookup", { buyer_id: buyerId(), message: $("msg").value.trim() || items.map(i => i.label).join(", "), need });
     if (r.error) throw new Error(r.error);
-    last = r; itemIdx = 0;
+    last = r; itemIdx = 0; explain = null; lineExplain = null;
     $("status").innerHTML = r.live_error ? `<div class="banner bad">Valio's live stock and prices can't be reached right now, so nothing can be confirmed. Try again in a moment.</div>` : "";
     selectPlan(0);
   } catch (e) { $("status").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; }
@@ -260,13 +281,21 @@ function planStatus(p) {
 
 function plansHtml(r) {
   if (!r.plans.length) return `<h2>Ways to get it</h2><div class="banner warn">${esc(r.plan.why)}</div>`;
+  const ex = explain && r.plans[explain.j] && r.plans[explain.j].ratings[explain.k];
   return `<h2>${r.plans.length === 1 ? "The way to get it" : r.plans.length + " ways to get it"}</h2><div class="plans">${r.plans.map((p, j) => `
-    <button class="card plan ${j === planIdx ? "sel" : ""}" onclick="selectPlan(${j})">
+    <div class="card plan ${j === planIdx ? "sel" : ""}" role="button" tabindex="0" onclick="selectPlan(${j})" style="cursor:pointer">
       <div class="top"><span class="label">${esc(p.label)}</span><span class="price">${eur(p.total_eur)}</span></div>
       <div class="what">${planWhat(p)}</div>
       <div class="status">${planStatus(p)}</div>
       ${p.over_budget ? `<div class="faint" style="color:var(--bad);margin-top:4px">Over your budget</div>` : ""}
-    </button>`).join("")}</div>`;
+      ${p.rating_stars != null && p.criteria.length ? `<div class="rating">
+        <div class="crit-row" style="font-weight:600"><span>Overall</span>${starRow(p.rating_stars)}</div>
+        ${p.criteria.map(k => `<button class="crit-row ${explain && explain.j === j && explain.k === k ? "on" : ""}" title="Why?"
+            onclick="event.stopPropagation(); toggleExplain(${j}, '${k}')"><span>${esc(p.ratings[k].name)} <span class="faint">ⓘ</span></span>${starRow(p.ratings[k].stars)}</button>`).join("")}
+      </div>` : ""}
+    </div>`).join("")}</div>
+    ${ex ? `<div class="explain"><b>${esc(r.plans[explain.j].label)} · ${esc(ex.name)}: ${ex.stars.toFixed(1)}★</b>
+      <button class="ghost small" style="float:right" onclick="explain=null;render()" aria-label="Close">✕</button><div style="margin-top:4px">${esc(ex.why)}</div></div>` : ""}`;
 }
 
 function alternatives(line) {
@@ -297,6 +326,9 @@ function draftHtml(r) {
         <div class="faint">${esc(o.product_id)}${o.brand ? " · " + esc(o.brand) : ""}${o.origin ? " · " + esc(o.origin) : ""}${o.labels && o.labels.length ? " · " + esc(o.labels[0]) : ""}</div>
         <div class="row" style="gap:6px;font-size:13px;margin-top:2px">${stock(o)}</div>
         <div style="font-size:14px;margin-top:2px"><b>${eur(o.comparison_price_eur || o.unit_price_eur)}</b> / ${esc(o.comparison_price_eur ? unit : o.sales_unit)}<span class="faint">${vat}</span></div>
+        ${(o.criteria || []).length ? `<div class="row" style="gap:6px;margin-top:6px">${o.criteria.map(c =>
+          `<button class="crit-row inline ${lineExplain === o.product_id + ":" + c ? "on" : ""}" onclick="toggleLineExplain('${o.product_id}', '${c}')">${esc(o.ratings[c].name)} ${starRow(o.ratings[c].stars)}</button>`).join("")}</div>
+          ${lineExplain && lineExplain.startsWith(o.product_id + ":") ? `<div class="explain" style="margin-top:6px">${esc(o.ratings[lineExplain.split(":")[1]].why)}</div>` : ""}` : ""}
         ${d.match !== "exact" ? `<div class="row" style="gap:6px;margin-top:2px">${valioNote(o)}<span class="faint" style="color:var(--warn)">${d.match === "close" ? "Close variant" : "Substitute"}: ${esc(o.match_reason)}</span></div>` : ""}
         ${alts.length ? `<div class="alts"><span class="faint">Swap for</span>${alts.map(a => `<button onclick="swap(${k}, '${a.product_id}')" title="${esc(a.name)} (${esc(a.available_units_text)})">
           <span class="dot ${a.status === "supplier" || a.status === "partial" ? "warn" : "ok"}"></span>${valioFor(a, d) ? "★ Valio's pick: " : ""}${esc(a.brand || shortName(a.name))} ${num(a.content_per_sales_unit)} ${esc(unit)} pack${a.match !== "exact" ? " (" + esc(a.match === "close" ? "variant" : "substitute") + ")" : ""} · ${eur(a.comparison_price_eur)}/${esc(unit)}</button>`).join("")}</div>` : ""}

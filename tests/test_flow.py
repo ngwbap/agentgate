@@ -350,6 +350,40 @@ def test_pausing_one_agent_leaves_the_others_working():
     assert client.get("/api/v1/products?q=milk", headers=AURORA).status_code == 200
 
 
+# ---------------------------------------------------------------- what matters most: stars and reasons
+
+def test_several_criteria_count_equally():
+    assert lookup._weights(["price", "reliability", "low_co2"]) == {"price": 0.3333, "reliability": 0.3333, "co2": 0.3333}
+    assert lookup._weights(["reliability", "finnish_origin"]) == {"price": 0.0, "reliability": 1.0, "co2": 0.0}
+    assert lookup._weights([]) == {"price": 1.0, "reliability": 0.0, "co2": 0.0}
+    assert [lookup.stars(x) for x in (0, 0.5, 0.6, 0.94, 1)] == [1.0, 3.0, 3.5, 5.0, 5.0]
+
+
+def test_stars_explain_themselves_with_valio_data():
+    r = run_lookup(MILK)
+    item = r["results"][0]["item"]
+    need = {**r["need"], "priorities": ["price", "reliability", "low_co2"], "items": [item]}
+    res = core.smart_lookup("hotel-aurora", MILK, need=need)["results"][0]
+    by_id = {o["product_id"]: o for o in res["options"]}
+    cheap, dear = by_id["900001"], by_id["900002"]                 # 1.30 vs 1.55 EUR per litre
+    assert cheap["criteria"] == ["price", "reliability", "co2"]
+    assert cheap["ratings"]["price"]["stars"] == 5.0 and "1.30 € per L" in cheap["ratings"]["price"]["why"]
+    assert dear["ratings"]["price"]["stars"] == 4.5 and "84% of the best price" in dear["ratings"]["price"]["why"]
+    assert "99.0%" in cheap["ratings"]["reliability"]["why"] and dear["ratings"]["reliability"]["stars"] == 5.0
+    co2 = cheap["ratings"]["co2"]["why"]
+    assert "1.1 kg CO₂e per kg" in co2 and "average for this product's group" in co2   # honest about what CO2 means
+    best = res["plans"][0]
+    assert set(best["ratings"]) == {"price", "reliability", "co2"} and best["rating_stars"] is not None
+    assert "Weighted by how much each product covers" in best["ratings"]["price"]["why"]    # 900001 + 900002
+
+
+def test_unknown_reliability_is_said_out_loud():
+    res = run_lookup(MILK)["results"][0]
+    sour = next((o for o in res["options"] if o["reliability"] is None), None)
+    if sour:
+        assert "no history" in sour["ratings"]["reliability"]["why"] and sour["ratings"]["reliability"]["stars"] == 3.5
+
+
 # ---------------------------------------------------------------- the request: budget, assumptions, edits
 
 def test_budget_is_understood_and_ranks_plans():

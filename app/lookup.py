@@ -31,7 +31,8 @@ LIVE_SUBSTITUTE = 4        # substitutes checked live, and only when needed
 VALIO_SUBS_MAX = 6         # extra products added because Valio itself lists them as substitutes
 VALIO_PICK_BONUS = 0.1     # a variant or substitute Valio recommends is a better match than one the AI guessed
 TERMINAL_UNKNOWN = 999999  # Valio's marker for "supplier stock, quantity unknown"
-BASE_WEIGHTS = {"price": 0.5, "reliability": 0.3, "co2": 0.2}
+CRITERIA = {"price": "price", "reliability": "reliability", "low_co2": "co2"}   # buyer's choice -> score part
+CRITERION_NAMES = {"price": "Price", "reliability": "Reliability", "co2": "Carbon footprint"}
 
 # Good-better-best plan scoring (shown in the UI).
 W_CERTAINTY, W_FIDELITY = 0.55, 0.45
@@ -72,12 +73,43 @@ def _shortlist(candidates: list[dict], quantity: float, n: int) -> list[dict]:
 
 
 def _weights(priorities: list[str]) -> dict:
-    w = dict(BASE_WEIGHTS)
-    if priorities and priorities[0] == "reliability":
-        w = {"price": 0.35, "reliability": 0.45, "co2": 0.2}
-    elif priorities and priorities[0] == "low_co2":
-        w = {"price": 0.35, "reliability": 0.25, "co2": 0.4}
-    return w
+    """The criteria the buyer ticked count equally; the others don't count. Nothing ticked = price."""
+    chosen = list(dict.fromkeys(CRITERIA[p] for p in priorities or [] if p in CRITERIA)) or ["price"]
+    return {k: (round(1 / len(chosen), 4) if k in chosen else 0.0) for k in CRITERION_NAMES}
+
+
+def stars(part: float) -> float:
+    """0..1 score -> 1..5 stars in half steps."""
+    return round((1 + 4 * _clip(part)) * 2) / 2
+
+
+def _explain(o: dict, parts: dict, ctx: dict) -> dict:
+    """Per criterion: stars plus a plain-language reason built only from Valio's data."""
+    unit = o["content_unit"] if o["comparison_price_eur"] else "pack"
+    m, pmin = ctx["metric"](o), ctx["pmin"]
+    if m:
+        price = (f"{m:.2f} € per {unit} from Valio's Price API ({o.get('price_basis', 'catalog price')}). "
+                 f"The cheapest product checked here costs {pmin:.2f} € per {unit}, so this one scores "
+                 f"{pmin / m:.0%} of the best price → {stars(parts['price'])}★.")
+    else:
+        price = "Valio's Price API gave no price for this product, so it can't be rated on price (1★)."
+    r = o["reliability"]
+    if r is not None:
+        rel = (f"Valio's delivery reliability file: {r:.1%} of this product's orders were delivered as ordered. "
+               f"On this scale 85 % or less is 1★ and 100 % is 5★, so {r:.1%} → {stars(parts['reliability'])}★.")
+    else:
+        rel = (f"Valio's delivery reliability file has no history for this product, so it counts as average "
+               f"→ {stars(parts['reliability'])}★.")
+    if o.get("co2_per_kg"):
+        same = " All products checked here share that value, so it doesn't separate them." if ctx["co2_same"] else ""
+        co2 = (f"Valio's carbon footprint file: {o['co2_per_kg']:g} kg CO₂e per kg, the average for this product's "
+               f"group (not a measurement of this exact product). The lowest checked here is {ctx['co2_min']:g} kg per kg "
+               f"→ {stars(parts['co2'])}★.{same}")
+    else:
+        co2 = f"Valio's carbon footprint file has no value for this product, so it counts as average → {stars(parts['co2'])}★."
+    texts = {"price": price, "reliability": rel, "co2": co2}
+    return {k: {"name": CRITERION_NAMES[k], "stars": stars(parts[k]), "part": round(parts[k], 3), "why": texts[k]}
+            for k in CRITERION_NAMES}
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -195,6 +227,8 @@ def build_option(p: dict, item: dict, deliver_by: str | None, avail: dict | None
         "free_from_allergens": [ALLERGENS.get(a, a) for a in p["free_from"]],
         "flags": flags, "evidence": evidence, "tier": tier,
         "tax_rate": ((price or {}).get("tax") or {}).get("taxRate"),
+        "price_basis": "your customer price" if (price or {}).get("netPriceFound") else "catalog price",
+        "co2_per_kg": p["co2_per_kg"],
         "available_units_text": _stock_text(status, available_amount, p["sales_unit"]),
     }
 
@@ -228,6 +262,9 @@ def rank(options: list[dict], priorities: list[str], preferred_labels: list[str]
     co2s = [o["co2_kg"] for o in options if o["co2_kg"]]
     pmin = min(prices) if prices else None
     cmin = min(co2s) if co2s else None
+    per_kg = [o["co2_per_kg"] for o in options if o.get("co2_per_kg")]
+    ctx = {"metric": metric, "pmin": pmin, "co2_min": min(per_kg) if per_kg else None,
+           "co2_same": len(set(per_kg)) <= 1 and len(per_kg) > 1}
     wanted = {LABEL_NAMES.get(l, l) for l in preferred_labels}
     for o in options:
         m = metric(o)
@@ -247,6 +284,11 @@ def rank(options: list[dict], priorities: list[str], preferred_labels: list[str]
                            - match_penalty - over_penalty, 3)
         o["score_parts"] = {"price": round(price_s, 2), "reliability": round(rel_s, 2), "co2": round(co2_s, 2),
                             "over_order_penalty": round(over_penalty, 3), "weights": w}
+        parts = {"price": price_s, "reliability": rel_s, "co2": co2_s}
+        o["ratings"] = _explain(o, parts, ctx)
+        o["criteria"] = [k for k, v in w.items() if v]
+        o["rating"] = round(sum(w[k] * parts[k] for k in parts), 3)       # only the ticked criteria count
+        o["rating_stars"] = stars(o["rating"])
     options.sort(key=lambda o: (o["tier"], MATCH_ORDER.get(o["match"], 3), -o["score"]))
     return options
 
@@ -296,6 +338,7 @@ def _line(o: dict, units: float, item: dict) -> dict:
             "content": round(units * _size(o, item), 2), "unit_price_eur": o["unit_price_eur"],
             "total_eur": round(units * o["unit_price_eur"], 2) if o["unit_price_eur"] else None,
             "match": o["match"], "match_reason": o["match_reason"], "valio_pick": bool(o.get("valio_pick")),
+            "ratings": o.get("ratings") or {}, "rating": o.get("rating"), "criteria": o.get("criteria") or [],
             "source": "supplier" if o["status"] == "supplier" else "Valio stock",
             "cutoff_passed": o["cutoff_passed"], "certainty": _line_certainty(o)}
 
@@ -313,6 +356,24 @@ def _fill(sources: list[dict], item: dict) -> tuple[list[dict], float]:
             lines.append(_line(o, take, item))
             remaining -= take * size
     return lines, max(remaining, 0.0)
+
+
+def _plan_ratings(lines: list[dict]) -> tuple[dict, float, list[str]]:
+    """Stars for a plan: each product's stars, weighted by how much of the order it covers."""
+    rated = [l for l in lines if l.get("ratings")]
+    if not rated:
+        return {}, 0.0, []
+    weight = {id(l): (l["content"] or l["units"] or 1) for l in rated}
+    total = sum(weight.values())
+    out = {}
+    for k in rated[0]["ratings"]:
+        part = sum(weight[id(l)] * l["ratings"][k]["part"] for l in rated) / total
+        why = rated[0]["ratings"][k]["why"] if len(rated) == 1 else (
+            "Weighted by how much each product covers: " +
+            "; ".join(f"{l['name']}: {l['ratings'][k]['stars']}★ ({l['ratings'][k]['why']})" for l in rated))
+        out[k] = {"name": rated[0]["ratings"][k]["name"], "stars": stars(part), "part": round(part, 3), "why": why}
+    rating = sum(weight[id(l)] * (l["rating"] or 0) for l in rated) / total
+    return out, round(rating, 3), rated[0]["criteria"]
 
 
 def _line_fidelity(l: dict) -> float:
@@ -371,6 +432,7 @@ def _make_plan(kind: str, lines: list[dict], item: dict) -> dict:
     elif unit != "PCS" and covered - qty > 0.02 * qty:
         trade_offs.append(f"{covered - qty:g} {unit} more than needed (whole sales units)")
 
+    ratings, rating, criteria = _plan_ratings(lines)
     first = lines[0]
     if kind == "single":
         why = f"{first['name']} covers the full {qty:g} {unit} from Valio's own stock, on time."
@@ -400,6 +462,7 @@ def _make_plan(kind: str, lines: list[dict], item: dict) -> dict:
         "score": round(W_CERTAINTY * certainty + W_FIDELITY * fidelity, 3),
         "trade_offs": trade_offs, "approval_needed": approval,
         "is_substitute": any(l["match"] != "exact" for l in lines), "why": why,
+        "ratings": ratings, "rating": rating, "rating_stars": stars(rating) if ratings else None, "criteria": criteria,
     }
 
 
@@ -462,7 +525,7 @@ def build_plans(options: list[dict], item: dict) -> list[dict]:
             candidates.append(_make_plan("partial", lines, item))
 
     seen, distinct = set(), []
-    for p in sorted(candidates, key=lambda p: (-p["score"], p["total_eur"])):
+    for p in sorted(candidates, key=lambda p: (-p["score"], -p["rating"], p["total_eur"])):
         key = tuple(sorted((l["product_id"], l["units"]) for l in p["lines"]))
         if key not in seen:
             seen.add(key)
@@ -476,7 +539,7 @@ def build_plans(options: list[dict], item: dict) -> list[dict]:
     for p in distinct:
         if len(chosen) < 3 and p not in chosen:
             chosen.append(p)
-    chosen.sort(key=lambda p: (-p["score"], p["total_eur"]))
+    chosen.sort(key=lambda p: (-p["score"], -p["rating"], p["total_eur"]))
     for label, p in zip(PLAN_LABELS, chosen):
         p["label"] = label
     return chosen
@@ -488,7 +551,7 @@ def apply_budget(plans: list[dict], budget: float | None) -> list[dict]:
         p["over_budget"] = bool(budget and p["total_eur"] > budget)
         if p["over_budget"]:
             p["trade_offs"].append(f"{p['total_eur']:,.2f} € is over your {budget:,.0f} € budget")
-    plans.sort(key=lambda p: (p["over_budget"], -p["score"], p["total_eur"]))
+    plans.sort(key=lambda p: (p["over_budget"], -p["score"], -p.get("rating", 0), p["total_eur"]))
     for label, p in zip(PLAN_LABELS, plans):
         p["label"] = label
     return plans
