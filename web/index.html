@@ -168,9 +168,18 @@ async function api(path, opts = {}) {
 }
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
+// Valio's sales unit codes in plain words (the code stays in a tooltip). Inferred: Valio's data doesn't define them.
+const UNIT_WORDS = { KI: ["case", "cases"], CS: ["case", "cases"], ST: ["piece", "pieces"], KG: ["kg", "kg"], PAK: ["pack", "packs"],
+  BAG: ["bag", "bags"], RAS: ["tub", "tubs"], PRK: ["jar", "jars"], BOT: ["bottle", "bottles"], KRT: ["carton", "cartons"],
+  PAL: ["pallet", "pallets"], SK: ["sack", "sacks"] };
+function unitWord(code, n) {
+  const w = UNIT_WORDS[code];
+  if (!w) return esc(code);
+  return `<abbr title="Valio unit code ${esc(code)}" style="text-decoration:none">${n === 1 ? w[0] : w[1]}</abbr>`;
+}
 function icon(o) {      // shelf-label tile: the real pack size instead of a stock photo
-  if (!o || !o.content_per_sales_unit) return `<b>${esc((o && o.sales_unit) || "")}</b>`;
-  return `<b>${num(o.content_per_sales_unit)} ${esc(o.content_unit === "PCS" ? "pcs" : o.content_unit)}</b><small>per ${esc(o.sales_unit)}</small>`;
+  if (!o || !o.content_per_sales_unit) return `<b>${unitWord((o && o.sales_unit) || "", 1)}</b>`;
+  return `<b>${num(o.content_per_sales_unit)} ${esc(o.content_unit === "PCS" ? "pcs" : o.content_unit)}</b><small>per ${unitWord(o.sales_unit, 1)}</small>`;
 }
 function stock(o) {
   const cls = o.status === "in_stock" ? "ok" : (o.status === "partial" || o.status === "supplier") ? "warn" : "bad";
@@ -324,7 +333,7 @@ function planWhat(p) {
   const l = p.lines;
   if (l.length === 1) {
     const o = opt(l[0].product_id);
-    return `${num(l[0].units)} × ${esc(shortName(l[0].name))}${o && o.content_per_sales_unit ? ` <span class="faint">(${num(o.content_per_sales_unit)} ${esc(o.content_unit)})</span>` : ""}`;
+    return `${num(l[0].units)} ${unitWord(l[0].sales_unit, l[0].units)} of ${esc(shortName(l[0].name))}${o && o.content_per_sales_unit ? ` <span class="faint">(${num(o.content_per_sales_unit)} ${esc(o.content_unit)} each)</span>` : ""}`;
   }
   return `${l.length} products, split`;
 }
@@ -395,7 +404,7 @@ function altsTable(d, k, o, unit, alts) {
           ${x.match !== "exact" ? `<span class="faint">${x.match === "close" ? "close variant" : "substitute"}</span>` : ""}</div>
         <div><span class="dot ${cls}"></span> ${where}</div>
         <div class="num">${x.comparison_price_eur != null ? eur(x.comparison_price_eur) : "–"}</div>
-        <div class="num"><b>${eur(units * x.unit_price_eur)}</b><div class="faint">${num(units)} ${esc(x.sales_unit)}</div></div>
+        <div class="num"><b>${eur(units * x.unit_price_eur)}</b><div class="faint">${num(units)} ${unitWord(x.sales_unit, units)}</div></div>
         <button class="crit-row" title="Why these stars?" onclick="altWhy = altWhy === '${x.product_id}' ? null : '${x.product_id}'; render()">${x.rating_stars != null ? starRow(x.rating_stars) : "–"}</button>
         <div>${current ? "" : `<button class="small" onclick="swap(${k}, '${x.product_id}')">Use this</button>`}</div>
       </div>${altWhy === x.product_id ? `<div class="explain" style="margin:2px 0 8px">${(x.criteria || []).map(c =>
@@ -426,7 +435,7 @@ function draftHtml(r) {
         <div class="name">${esc(o.name)}</div>
         <div class="meta"><span>No. ${esc(o.product_id)}</span>${o.brand ? `<span>${esc(o.brand)}</span>` : ""}${o.origin ? `<span>Origin ${esc(o.origin)}</span>` : ""}${o.labels && o.labels.length ? `<span>${esc(o.labels[0])}</span>` : ""}</div>
         <div class="row" style="gap:6px;font-size:13px;margin-top:2px">${stock(o)}</div>
-        <div style="font-size:14px;margin-top:2px"><b>${eur(o.comparison_price_eur || o.unit_price_eur)}</b> / ${esc(o.comparison_price_eur ? unit : o.sales_unit)}<span class="faint">${vat}</span></div>
+        <div style="font-size:14px;margin-top:2px"><b>${eur(o.comparison_price_eur || o.unit_price_eur)}</b> / ${o.comparison_price_eur ? esc(unit) : unitWord(o.sales_unit, 1)}<span class="faint">${vat}</span></div>
         ${(o.criteria || []).length ? `<div class="row" style="gap:6px;margin-top:6px">${o.criteria.map(c =>
           `<button class="crit-row inline ${lineExplain === o.product_id + ":" + c ? "on" : ""}" onclick="toggleLineExplain('${o.product_id}', '${c}')">${esc(o.ratings[c].name)} ${starRow(o.ratings[c].stars)}</button>`).join("")}</div>
           ${lineExplain && lineExplain.startsWith(o.product_id + ":") ? `<div class="explain" style="margin-top:6px">${esc(o.ratings[lineExplain.split(":")[1]].why)}</div>` : ""}` : ""}
@@ -437,7 +446,7 @@ function draftHtml(r) {
       </div>
       <div class="qty" style="text-align:center">
         <div class="stepper"><button onclick="step(${k},-1)" aria-label="Less">−</button><input type="number" min="0" value="${d.units}" onchange="setUnits(${k}, this.value)" aria-label="Quantity"><button onclick="step(${k},1)" aria-label="More">+</button></div>
-        <div class="faint" style="margin-top:4px">${esc(o.sales_unit)}${content ? " · " + num(content) + " " + esc(unit) : ""}</div>
+        <div class="faint" style="margin-top:4px">${unitWord(o.sales_unit, d.units)}${content ? ", " + num(content) + " " + esc(unit) + " in total" : ""}</div>
       </div>
       <div class="total">${eur((o.unit_price_eur || 0) * d.units)}</div>
       ${altsTable(d, k, o, unit, alts)}

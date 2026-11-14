@@ -233,12 +233,24 @@ def build_option(p: dict, item: dict, deliver_by: str | None, avail: dict | None
     }
 
 
+# Valio's sales unit codes in plain words (inferred from what each unit contains; Valio's data doesn't define them).
+SALES_UNITS = {"KI": ("case", "cases"), "CS": ("case", "cases"), "ST": ("piece", "pieces"), "KG": ("kg", "kg"),
+               "PAK": ("pack", "packs"), "BAG": ("bag", "bags"), "RAS": ("tub", "tubs"), "PRK": ("jar", "jars"),
+               "BOT": ("bottle", "bottles"), "KRT": ("carton", "cartons"), "PAL": ("pallet", "pallets"),
+               "SK": ("sack", "sacks"), "L": ("litre", "litres")}
+
+
+def unit_words(code: str, n: float) -> str:
+    one, many = SALES_UNITS.get(code, (code, code))
+    return f"{n:g} {one if n == 1 else many}"
+
+
 def _stock_text(status: str, amount, sales_unit: str) -> str:
     """Plain words for the product card."""
     if status == "in_stock":
-        return "In Valio stock" if not amount or amount >= TERMINAL_UNKNOWN else f"{amount:g} {sales_unit} in Valio stock"
+        return "In Valio stock" if not amount or amount >= TERMINAL_UNKNOWN else f"{unit_words(sales_unit, amount)} in Valio stock"
     if status == "partial":
-        return f"Only {amount:g} {sales_unit} in Valio stock"
+        return f"Only {unit_words(sales_unit, amount)} in Valio stock"
     if status == "supplier":
         return "From the supplier, quantity not guaranteed"
     return {"blocked": "Can't be ordered now", "unavailable": "Out of stock"}.get(status, "Not checked")

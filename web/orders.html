@@ -52,6 +52,13 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const eur = (v) => v == null ? "–" : v.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+const UNIT_WORDS = { KI: ["case", "cases"], CS: ["case", "cases"], ST: ["piece", "pieces"], KG: ["kg", "kg"], PAK: ["pack", "packs"],
+  BAG: ["bag", "bags"], RAS: ["tub", "tubs"], PRK: ["jar", "jars"], BOT: ["bottle", "bottles"], KRT: ["carton", "cartons"],
+  PAL: ["pallet", "pallets"], SK: ["sack", "sacks"] };
+function unitWord(code, n) {
+  const w = UNIT_WORDS[code];
+  return w ? `<abbr title="Valio unit code ${esc(code)}" style="text-decoration:none">${n == 1 ? w[0] : w[1]}</abbr>` : esc(code);
+}
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const dateText =(iso) => iso ? new Date(iso.slice(0, 10) + "T12:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "–";
 const STATUS = { pending_approval: ["warn", "Waiting for you"], confirmed: ["ok", "Confirmed"], rejected: ["bad", "Rejected"], cancelled: ["", "Withdrawn"] };
@@ -81,9 +88,9 @@ function orderCard(o) {
   const [cls, label] = STATUS[o.status] || ["", o.status];
   const waiting = o.status === "pending_approval", editing = editingOrder === o.order_id;
   const lines = o.lines.map((l, k) => `<div class="ln">
-      <div class="thumb sm">${l.content && l.quantity ? `<b>${(l.content / l.quantity).toLocaleString("en-GB", { maximumFractionDigits: 1 })} ${esc(l.content_unit)}</b><small>per ${esc(l.unit)}</small>` : `<b>${esc(l.unit)}</b>`}</div>
-      <div class="grow">${editing ? `<input type="number" min="0" value="${l.quantity}" data-k="${k}" aria-label="Quantity">` : `<b>${l.quantity}</b>`} × ${esc(l.name)}
-        <div class="faint" style="display:flex;gap:12px;flex-wrap:wrap">${l.content ? `<span>${Math.round(l.content).toLocaleString("en-GB")} ${esc(l.content_unit)} in ${esc(l.unit)}</span>` : ""}<span>${l.stock_source === "supplier" ? "From the supplier" : "Valio stock"}</span>${l.price_basis ? `<span>${esc(cap(l.price_basis))}</span>` : ""}</div></div>
+      <div class="thumb sm">${l.content && l.quantity ? `<b>${(l.content / l.quantity).toLocaleString("en-GB", { maximumFractionDigits: 1 })} ${esc(l.content_unit)}</b><small>per ${unitWord(l.unit, 1)}</small>` : `<b>${unitWord(l.unit, 1)}</b>`}</div>
+      <div class="grow">${editing ? `<input type="number" min="0" value="${l.quantity}" data-k="${k}" aria-label="Quantity"> ${unitWord(l.unit, 2)} of` : `<b>${l.quantity} ${unitWord(l.unit, l.quantity)}</b> of`} ${esc(l.name)}
+        <div class="faint" style="display:flex;gap:12px;flex-wrap:wrap">${l.content ? `<span>${Math.round(l.content).toLocaleString("en-GB")} ${esc(l.content_unit)} in total</span>` : ""}<span>${l.stock_source === "supplier" ? "From the supplier" : "Valio stock"}</span>${l.price_basis ? `<span>${esc(cap(l.price_basis))}</span>` : ""}</div></div>
       <div class="amt">${eur(l.line_total_eur)}</div></div>`).join("");
   let foot = "";
   if (waiting && editing) {
