@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from . import agent, config, core, llm
 
 WEB_DIR = config.ROOT / "web"
+NO_CACHE = {"Cache-Control": "no-cache"}     # browsers re-check the demo pages, so changes show without a hard refresh
 
 app = FastAPI(
     title="AgentGate - Valio Aimo front door for purchasing agents",
@@ -333,14 +334,14 @@ def api_reset():
 
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(WEB_DIR / "index.html", headers=NO_CACHE)
 
 
 @app.get("/orders", include_in_schema=False)
 def orders_page():
-    return FileResponse(WEB_DIR / "orders.html")
+    return FileResponse(WEB_DIR / "orders.html", headers=NO_CACHE)
 
 
 @app.get("/shared.css", include_in_schema=False)
 def shared_css():
-    return FileResponse(WEB_DIR / "shared.css", media_type="text/css", headers={"Cache-Control": "no-cache"})
+    return FileResponse(WEB_DIR / "shared.css", media_type="text/css", headers=NO_CACHE)

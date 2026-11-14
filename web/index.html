@@ -80,6 +80,7 @@
     border-radius: 0 0 10px 10px; border-top: 3px solid var(--fjord); }
   @media (min-height: 860px) { .checkout { position: sticky; bottom: 12px; box-shadow: 0 -2px 0 var(--frost); } }
   .checkout .sum { font-size: 24px; font-weight: 800; font-variation-settings: "wdth" 110; }
+  #result.stale { opacity: .38; pointer-events: none; filter: grayscale(.4); transition: opacity .2s; }
   .demo { border: 1px dashed var(--line-strong); border-radius: 8px; padding: 10px 12px; margin-top: 24px; font-size: 13px; }
   .funnel span { white-space: nowrap; }
 </style>
@@ -227,8 +228,15 @@ function starRow(n) {
 }
 function toggleExplain(j, k) { explain = explain && explain.j === j && explain.k === k ? null : { j, k }; render(); }
 function toggleLineExplain(pid, k) { const key = pid + ":" + k; lineExplain = lineExplain === key ? null : key; render(); }
-function addWish(v) { if (v.trim()) crit.other_wishes.push(v.trim()); renderCriteria(); $("c_wish").focus(); }
-function clearCriteria() { crit = blankNeed(); ci = 0; fillInfo = ""; renderCriteria(); }
+function addWish(v) { if (v.trim()) crit.other_wishes.push(v.trim()); renderCriteria(); markStale(); $("c_wish").focus(); }
+function clearCriteria() { crit = blankNeed(); ci = 0; fillInfo = ""; renderCriteria(); markStale(); }
+// Results belong to the boxes as they were when Find was pressed. Once the boxes change, say so.
+function markStale() {
+  if (!last || $("result").classList.contains("stale")) return;
+  $("result").classList.add("stale");
+  $("status").innerHTML = `<div class="banner warn">You changed the boxes after this search, so the results below are out of date. Press Find to update them.</div>`;
+}
+function markFresh() { $("result").classList.remove("stale"); }
 function setBusy(on, text) {
   document.querySelectorAll("#fill, #find, #mic").forEach(b => b.disabled = on);
   if (on) $("status").innerHTML = `<div class="banner" style="background:var(--soft)"><div class="spinner"></div>${esc(text)}</div>`;
@@ -247,7 +255,7 @@ async function fill() {
     ci = 0;
     fillInfo = n.engine === "offline parser" ? "Filled in by the simple built-in reader because the AI isn't available right now. Please check carefully."
       : "Filled in from your request. Check and change anything, then press Find.";
-    $("status").innerHTML = ""; renderCriteria(); return true;
+    $("status").innerHTML = ""; renderCriteria(); markStale(); return true;
   } catch (e) { $("status").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; return false; }
   finally { setBusy(false); }
 }
@@ -260,7 +268,7 @@ async function find() {
   const items = crit.items.filter(it => (it.label || "").trim());
   if (!items.length) { $("c_err").textContent = "Write which product you need. It's the only required box."; return; }
   const need = { ...crit, items: items.map(it => ({ ...it, product_terms: it.product_terms.length ? it.product_terms : [it.label], quantity: it.quantity || 0 })) };
-  sent = null; quote = null; $("result").innerHTML = "";
+  sent = null; quote = null; $("result").innerHTML = ""; markFresh();
   setBusy(true, "Finding the best way to get it… about 20 seconds.");
   try {
     const r = await post("/api/demo/lookup", { buyer_id: buyerId(), message: $("msg").value.trim() || items.map(i => i.label).join(", "), need });
@@ -491,6 +499,7 @@ function demoStats() {
 }
 
 $("fill").onclick = () => fill();
+$("criteria").addEventListener("change", markStale);      // any box edited (amount, date, ticks, ...)
 
 // Voice: speak the request (hands-free), then the boxes are filled in from it. Uses the browser's own
 // speech recognition (Chrome, Edge); the button is hidden where the browser doesn't offer it.
