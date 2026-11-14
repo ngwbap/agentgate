@@ -16,10 +16,16 @@ AgentGate turns **one sentence into a few trusted, deliverable options**, and le
   - Get up to three ways to fulfil the need: **Best / Better / Good**
   - Every option shows its trade-offs and its evidence (price validity, availability timestamp, GTIN, reliability and CO2 sources)
 
-- **Draft Order & Live Quote**
-  - Adjust amounts before sending
-  - Prices and availability checked live with Valio's APIs
+- **Order Sheet, Always in View**
+  - The cart sits on the right and stays visible: the request, order lines, total excl. VAT, who must approve and why, and the send button
+  - Adjust amounts before sending; prices and availability are checked live with Valio's APIs
   - Price per litre/kg shown for fair comparison
+  - On narrower screens the sheet follows the page and its total becomes a bar at the bottom
+
+- **Guided Steps**
+  - A step rail (**Ask → Check the boxes → Choose a way → Order**) shows where you are
+  - Editing the understood criteria after a search greys out the old results and steps back
+  - Voice input in English or Finnish (Chrome, Edge)
 
 - **Safe by Default**
   - Dietary claims and allergen exclusions are hard rules, also for substitutes
@@ -28,7 +34,8 @@ AgentGate turns **one sentence into a few trusted, deliverable options**, and le
 ### For Approvers (Orders Window)
 
 - **Orders & Approvals**
-  - Waiting and done lists with full history
+  - Sidebar sections: Waiting for approval, Done, History and Agent settings (the address keeps the section, e.g. `/orders#history`)
+  - Number tiles for waiting, confirmed and rejected orders
   - Approve, reject, or **approve with changes** (re-priced live, Valio's hard rules still apply)
 
 - **Agent Mandate Settings**
@@ -77,6 +84,11 @@ Two demo buyers live in `data/buyers.json`, each with two agents:
 ### Frontend
 
 - **Plain HTML, CSS and JavaScript** served by FastAPI (`web/`), no build step
+- **Portal layout**: shared top bar (logo, customer picker, Buyer/Approver switch) and sidebar navigation on both pages
+- **Design**: one shared stylesheet (`web/shared.css`) with design tokens and dark mode; colour carries meaning only (green/amber/red for stock and approval status, purple for what the AI did)
+- **Icons**: Lucide shapes as CSS masks, no emoji
+- **Accessibility**: 40px controls, visible focus rings, no sideways scrolling at 375px
+- **Voice input**: Web Speech API where the browser offers it
 
 ## 📦 Installation & Setup
 
@@ -119,8 +131,8 @@ venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
 ```
 
 The application will be available at:
-- **Buying Assistant**: http://127.0.0.1:8000 (type a request, check what was understood, pick a way, adjust the draft order, send it)
-- **Orders & Approvals**: http://127.0.0.1:8000/orders (approve, change, reject; history; agent settings and pause)
+- **Buying Assistant**: http://127.0.0.1:8000 (type or speak a request, check what was understood, pick a way, send it from the order sheet)
+- **Orders & Approvals**: http://127.0.0.1:8000/orders (approve, change, reject; jump to `#done`, `#history` or `#settings`)
 - **Demo Tools for the Pitch**: http://127.0.0.1:8000/?demo (misbehaving agent, reset, the funnel and plan scores)
 - **Interactive API Docs**: http://127.0.0.1:8000/docs
 
@@ -156,9 +168,9 @@ agentgate/
 │   ├── agent.py           # Demo purchasing agent used by the web UI
 │   └── config.py          # Settings from environment and .env
 ├── web/
-│   ├── index.html         # Buying assistant: request, understood criteria, Best / Better / Good, draft order
-│   ├── orders.html        # Orders window: waiting / done, approve with changes, history, agent settings
-│   └── shared.css
+│   ├── index.html         # Buying assistant: step rail, understood criteria, Best / Better / Good, order sheet
+│   ├── orders.html        # Orders window: waiting, done, history, agent settings; approve with changes
+│   └── shared.css         # Shared shell (top bar, sidebar), design tokens, icons, dark mode
 ├── data/
 │   ├── buyers.json        # Demo buyers, agents and mandates
 │   ├── catalog.json
