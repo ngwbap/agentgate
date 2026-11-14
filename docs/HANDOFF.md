@@ -120,6 +120,6 @@ Status when written: **3 small edits already applied** in `understand.py`: `NEED
   (Claude in Chrome works; the built-in browser can't reach localhost), commit, push.
 
 ### After that (switch back to Opus/Sonnet for these)
-- Update `docs/DESIGN.md` and `docs/AGENT_INTERFACE_SPEC.md` (they still mention the old mock catalog/contract prices).
+- ~~Update `docs/DESIGN.md` and `docs/AGENT_INTERFACE_SPEC.md`~~ done 14 Nov (spec is now v0.2).
 - Delete the unused old mock file `data/catalog.json` by hand (tool guard blocks it).
 - Pitch prep: webshop "before" (search "lactose free milk" → milk chocolate first), 2-minute video, deck.
