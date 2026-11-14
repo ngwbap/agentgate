@@ -74,8 +74,20 @@
   .line .meta { color: var(--faint); font-size: 12.5px; display: flex; gap: 12px; flex-wrap: wrap; }
   .line .total { font-weight: 800; text-align: right; font-size: 17px; }
   @media (max-width: 720px) { .line { grid-template-columns: 52px 1fr; } .line .qty, .line .total { grid-column: 2; text-align: left; } }
-  .alts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
-  .alts button { font-size: 12.5px; padding: 3px 10px; border-radius: 4px; font-weight: 400; }
+  .alt-wrap { grid-column: 1 / -1; margin-top: -8px; }
+  .alt-table { border: 1px solid var(--line); border-radius: 8px; padding: 2px 12px; margin-top: 6px; background: var(--frost); }
+  .alt-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 118px 78px 112px 122px 84px; gap: 10px; align-items: center;
+    padding: 8px 0; font-size: 13.5px; }
+  .alt-row + .alt-row { border-top: 1px solid var(--line); }
+  .alt-row.head { font-size: 12px; color: var(--muted); padding: 7px 0 5px; }
+  .alt-row.cur { background: var(--accent-soft); margin: 0 -12px; padding: 8px 12px; }
+  .alt-row .num { text-align: right; }
+  .alt-row .crit-row { width: auto; }
+  .alt-row .thumb.sm { width: 48px; } .alt-row .thumb.sm b { font-size: 11px; white-space: nowrap; }
+  @media (max-width: 820px) {
+    .alt-row { grid-template-columns: 44px minmax(0, 1fr) auto auto; }
+    .alt-row > :nth-child(3), .alt-row > :nth-child(4), .alt-row > :nth-child(6) { display: none; }
+  }
   .checkout { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 0;
     border-radius: 0 0 10px 10px; border-top: 3px solid var(--fjord); }
   @media (min-height: 860px) { .checkout { position: sticky; bottom: 12px; box-shadow: 0 -2px 0 var(--frost); } }
@@ -134,6 +146,7 @@ const ALLERGENS = { AM: "milk", AW: "gluten", AE: "egg", AP: "peanuts", AN: "tre
   AS: "sesame", AC: "crustaceans", UM: "molluscs", BC: "celery", BM: "mustard", NL: "lupin", AU: "sulphites" };
 const PRIORITY = { price: "Price", reliability: "Reliability", low_co2: "Carbon footprint" };
 let explain = null, lineExplain = null;      // which criterion's reasoning is open (plan card / product)
+let openAlts = new Set(), altWhy = null;     // which products' comparison table is open; whose stars are explained
 const FINNISH = ["GOODS_FROM_FINLAND_BLUE_SWAN", "MADE_IN_FINLAND_FLAG_WITH_KEY", "FINNISH_HEART_SYMBOL"], ORGANIC = ["EU_ORGANIC_FARMING"];
 const MAIN_CLAIMS = ["FREE_FROM_LACTOSE", "FREE_FROM_GLUTEN", "VEGAN", "FREE_FROM_EGGS"], MAIN_ALLERGENS = ["AM", "AW", "AE", "AP", "AN", "SH"];
 
@@ -276,7 +289,7 @@ async function find() {
   try {
     const r = await post("/api/demo/lookup", { buyer_id: buyerId(), message: $("msg").value.trim() || items.map(i => i.label).join(", "), need });
     if (r.error) throw new Error(r.error);
-    last = r; itemIdx = 0; explain = null; lineExplain = null;
+    last = r; itemIdx = 0; explain = null; lineExplain = null; openAlts = new Set(); altWhy = null;
     $("status").innerHTML = r.live_error ? `<div class="banner bad">Valio's live stock and prices can't be reached right now, so nothing can be confirmed. Try again in a moment.</div>` : "";
     selectPlan(0);
   } catch (e) { $("status").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; }
@@ -363,8 +376,37 @@ function alternatives(line) {
       ["in_stock", "partial", "supplier"].includes(x.status) && x.match !== "different")
     .sort((a, b) => valioFor(b, line) - valioFor(a, line) || (a.status === "supplier") - (b.status === "supplier") ||
                     (a.comparison_price_eur || 1e9) - (b.comparison_price_eur || 1e9))
-    .slice(0, 3);
+    .slice(0, 4);
 }
+// Comparison of other products that fit, under a product in the draft order. Closed by default.
+function altsTable(d, k, o, unit, alts) {
+  if (!alts.length) return "";
+  const open = openAlts.has(d.product_id), content = (o.content_per_sales_unit || 0) * d.units;
+  const link = `<button class="ghost small" onclick="toggleAlts('${d.product_id}')">${open ? "Hide" : "Show"} ${alts.length} other product${alts.length > 1 ? "s" : ""} that fit your order</button>`;
+  if (!open) return `<div class="alt-wrap">${link}</div>`;
+  const row = (x, current) => {
+    const units = current ? d.units : Math.max(1, Math.ceil(content / x.content_per_sales_unit - 1e-9));
+    const cls = x.status === "in_stock" ? "ok" : (x.status === "partial" || x.status === "supplier") ? "warn" : "bad";
+    const where = { in_stock: "Valio stock", partial: "Partly in stock", supplier: "Supplier" }[x.status] || "Unavailable";
+    return `<div class="alt-row ${current ? "cur" : ""}">
+        <div class="thumb sm">${icon(x)}</div>
+        <div>${esc(x.name)}${current ? ` <span class="faint">(in your order)</span>` : ""}
+          ${valioFor(x, d) ? `<span class="pill ok" style="font-size:11px;padding:0 6px">★ Valio's pick</span>` : ""}
+          ${x.match !== "exact" ? `<span class="faint">${x.match === "close" ? "close variant" : "substitute"}</span>` : ""}</div>
+        <div><span class="dot ${cls}"></span> ${where}</div>
+        <div class="num">${x.comparison_price_eur != null ? eur(x.comparison_price_eur) : "–"}</div>
+        <div class="num"><b>${eur(units * x.unit_price_eur)}</b><div class="faint">${num(units)} ${esc(x.sales_unit)}</div></div>
+        <button class="crit-row" title="Why these stars?" onclick="altWhy = altWhy === '${x.product_id}' ? null : '${x.product_id}'; render()">${x.rating_stars != null ? starRow(x.rating_stars) : "–"}</button>
+        <div>${current ? "" : `<button class="small" onclick="swap(${k}, '${x.product_id}')">Use this</button>`}</div>
+      </div>${altWhy === x.product_id ? `<div class="explain" style="margin:2px 0 8px">${(x.criteria || []).map(c =>
+        `<div style="margin-bottom:4px"><b>${esc(x.ratings[c].name)} ${x.ratings[c].stars.toFixed(1)}★</b> ${esc(x.ratings[c].why)}</div>`).join("")}</div>` : ""}`;
+  };
+  return `<div class="alt-wrap">${link}<div class="alt-table">
+    <div class="alt-row head"><span></span><span>Product</span><span>Stock</span><span class="num">Price per ${esc(unit === "PCS" ? "pack" : unit)}</span>
+      <span class="num">Total for your amount</span><span>Your stars</span><span></span></div>
+    ${row(o, true)}${alts.map(x => row(x, false)).join("")}</div></div>`;
+}
+function toggleAlts(pid) { openAlts.has(pid) ? openAlts.delete(pid) : openAlts.add(pid); altWhy = null; render(); }
 function valioFor(o, line) { return (o.valio_substitute_for || []).includes(line.product_id) ? 1 : 0; }
 function valioNote(o) {
   return o.valio_pick && o.match !== "exact" ? `<span class="pill ok" style="font-size:12px;padding:1px 8px">★ Valio's pick</span>` : "";
@@ -389,8 +431,6 @@ function draftHtml(r) {
           `<button class="crit-row inline ${lineExplain === o.product_id + ":" + c ? "on" : ""}" onclick="toggleLineExplain('${o.product_id}', '${c}')">${esc(o.ratings[c].name)} ${starRow(o.ratings[c].stars)}</button>`).join("")}</div>
           ${lineExplain && lineExplain.startsWith(o.product_id + ":") ? `<div class="explain" style="margin-top:6px">${esc(o.ratings[lineExplain.split(":")[1]].why)}</div>` : ""}` : ""}
         ${d.match !== "exact" ? `<div class="row" style="gap:6px;margin-top:2px">${valioNote(o)}<span class="faint" style="color:var(--warn)">${d.match === "close" ? "Close variant" : "Substitute"}: ${esc(o.match_reason)}</span></div>` : ""}
-        ${alts.length ? `<div class="alts"><span class="faint">Swap for</span>${alts.map(a => `<button onclick="swap(${k}, '${a.product_id}')" title="${esc(a.name)} (${esc(a.available_units_text)})">
-          <span class="dot ${a.status === "supplier" || a.status === "partial" ? "warn" : "ok"}"></span>${valioFor(a, d) ? "★ Valio's pick: " : ""}${esc(a.brand || shortName(a.name))} ${num(a.content_per_sales_unit)} ${esc(unit)} pack${a.match !== "exact" ? " (" + esc(a.match === "close" ? "variant" : "substitute") + ")" : ""} · ${eur(a.comparison_price_eur)}/${esc(unit)}</button>`).join("")}</div>` : ""}
         <details class="why"><summary>Where this comes from</summary><ul>${Object.entries(o.evidence || {}).map(([k2, v]) => `<li><b>${esc(k2.replace("_", " "))}:</b> ${esc(v)}</li>`).join("")}
           ${o.contains_allergens && o.contains_allergens.length ? `<li><b>contains:</b> ${esc(o.contains_allergens.join(", "))}</li>` : ""}
           ${o.may_contain_allergens && o.may_contain_allergens.length ? `<li><b>may contain:</b> ${esc(o.may_contain_allergens.join(", "))}</li>` : ""}</ul></details>
@@ -400,6 +440,7 @@ function draftHtml(r) {
         <div class="faint" style="margin-top:4px">${esc(o.sales_unit)}${content ? " · " + num(content) + " " + esc(unit) : ""}</div>
       </div>
       <div class="total">${eur((o.unit_price_eur || 0) * d.units)}</div>
+      ${altsTable(d, k, o, unit, alts)}
     </div>`;
   }).join("")}</div>`;
 }
@@ -442,6 +483,7 @@ function swap(k, pid) {
   const old = opt(draft[k].product_id), o = opt(pid);
   const content = (old.content_per_sales_unit || 0) * draft[k].units;
   draft[k] = { product_id: pid, units: Math.max(1, Math.ceil(content / (o.content_per_sales_unit || 1) - 1e-9)), match: o.match };
+  openAlts = new Set(); altWhy = null;          // close the comparison: the swap is done
   quote = null; render(); requestQuote();
 }
 function requestQuote() {
