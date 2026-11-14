@@ -238,6 +238,12 @@ class DraftOrder(BaseModel):
     reason: str
     is_substitute: bool = False
     declared_risks: list[str] = []
+    notes: list[str] = []            # the buyer's other wishes, shown to the approver
+
+
+class UnderstandRequest(BaseModel):
+    buyer_id: str
+    message: str
 
 
 class PlanLine(BaseModel):
@@ -280,7 +286,14 @@ def api_demo_quote(body: DraftQuote):
 @app.post("/api/demo/order", tags=["demo"])
 def api_demo_order(body: DraftOrder):
     _buyer_or_404(body.buyer_id)
-    return agent.order(body.buyer_id, body.quote_id, body.reason, body.is_substitute, body.declared_risks)
+    return agent.order(body.buyer_id, body.quote_id, body.reason, body.is_substitute, body.declared_risks, body.notes)
+
+
+@app.post("/api/demo/understand", tags=["demo"])
+def api_demo_understand(body: UnderstandRequest):
+    """Read a request into criteria only (no search). The buyer checks the tick boxes, then searches."""
+    _buyer_or_404(body.buyer_id)
+    return agent.understand(body.buyer_id, body.message)
 
 
 @app.post("/api/demo/order-plan", tags=["demo"])

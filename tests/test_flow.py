@@ -371,19 +371,53 @@ def test_buyer_can_edit_the_understood_need_and_search_again():
     r = run_lookup(MILK)
     item = {**r["results"][0]["item"], "quantity": 500}
     edited = core.smart_lookup("hotel-aurora", MILK, need={**r["need"], "items": [item], "budget_eur": 800})
-    assert edited["need"]["engine"] == "edited by the buyer"
+    assert edited["need"]["engine"] == "the buyer's criteria"
     best = edited["results"][0]["plans"][0]
     assert best["kind"] == "split" or best["confidence"] == "confirmed"           # 500 L fits in Valio stock (600 L)
     assert best["total_eur"] == 650.0 and not best["over_budget"]
 
 
-def test_an_edited_need_without_an_amount_is_refused():
-    r = run_lookup(MILK)
-    item = {**r["results"][0]["item"], "quantity": 0}
-    res = client.post("/api/v1/lookup", headers=AURORA, json={"request": MILK})
-    assert res.status_code == 200
-    with pytest.raises(core.WholesalerError):
-        core.smart_lookup("hotel-aurora", MILK, need={**r["need"], "items": [item]})
+def test_only_the_product_is_required():
+    need = {"items": [{"label": "oat drink", "product_terms": ["oat drink", "kaurajuoma"]}]}
+    r = core.smart_lookup("hotel-aurora", "oat drink", need=need)
+    item = r["results"][0]["item"]
+    assert item["quantity"] == 1 and item["unit"] == "PCS" and item["amount_given"] is False
+    assert r["assumptions"][0] == {"field": "quantity", "text": "No amount given, so prices are for one pack"}
+    assert r["results"][0]["plans"][0]["lines"][0]["units"] == 1
+    with pytest.raises(core.WholesalerError, match="which product"):
+        core.smart_lookup("hotel-aurora", "", need={"items": [{"label": " ", "quantity": 5}]})
+
+
+def test_fill_in_reads_the_request_without_searching():
+    calls = core.store.valio.stats["calls"]
+    r = client.post("/api/demo/understand", json={"buyer_id": "hotel-aurora",
+                                                  "message": "24 litres of lactose-free milk by Monday, max 50 €"}).json()
+    n = r["need"]
+    assert n["items"][0]["quantity"] == 24 and n["items"][0]["must_claims"] == ["FREE_FROM_LACTOSE"]
+    assert n["budget_eur"] == 50 and n["deliver_by"] == "2026-11-16" and n["other_wishes"] == []
+    assert core.store.valio.stats["calls"] == calls                       # no live API calls for reading a request
+    assert "error" in client.post("/api/demo/understand", json={"buyer_id": "hotel-aurora", "message": " "}).json()
+
+
+def test_built_in_reader_finds_product_allergy_and_wishes():
+    from app.understand import parse_offline
+    from datetime import date
+    n = parse_offline("Our school needs 40 kg of chocolate cookies by Monday, max 600 €. "
+                      "A pupil has a hazelnut allergy. Deliver to the back door.", date(2026, 11, 14))
+    it = n["items"][0]
+    assert it["label"] == "chocolate cookies" and it["quantity"] == 40 and it["unit"] == "KG"
+    assert it["exclude_allergens"] == ["SH"] and it["strict_allergens"]
+    assert n["budget_eur"] == 600 and n["other_wishes"] == ["Deliver to the back door"]
+
+
+def test_buyers_wishes_travel_with_the_order_but_are_not_rules():
+    plan = run_lookup("24 litres of oat drink by Monday")["results"][0]["plan"]
+    lines = [{"product_id": l["product_id"], "units": l["units"]} for l in plan["lines"]]
+    q = client.post("/api/demo/quote", json={"buyer_id": "hotel-aurora", "deliver_by": "2026-11-16", "lines": lines}).json()
+    o = client.post("/api/demo/order", json={"buyer_id": "hotel-aurora", "quote_id": q["quote_id"], "reason": plan["why"],
+                                             "notes": ["Deliver to the back door"]}).json()
+    assert o["notes"] == ["Deliver to the back door"]
+    assert [t["kind"] for t in o["policy"]["tags"]] == ["settings"]       # a wish never changes the door's decision
 
 
 def test_quote_refuses_more_than_valio_has_in_stock():

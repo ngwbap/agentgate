@@ -27,10 +27,19 @@
   .checkout { display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; box-shadow: 0 6px 24px rgba(0,0,0,.08); }
   @media (min-height: 860px) { .checkout { position: sticky; bottom: 12px; } }
   .checkout .sum { font-size: 20px; font-weight: 700; }
-  .edit { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px 14px; }
-  .edit label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-  .checks { display: flex; flex-wrap: wrap; gap: 6px; }
-  .checks label { flex-direction: row; align-items: center; gap: 4px; font-size: 13px; color: var(--ink); }
+  .crit { margin-top: 12px; }
+  .crit .fields { display: grid; grid-template-columns: 2fr 1.4fr 1fr 1fr; gap: 10px; }
+  @media (max-width: 720px) { .crit .fields { grid-template-columns: 1fr 1fr; } }
+  .crit label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .crit .group { margin-top: 14px; }
+  .crit .group > .t { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .tick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 5px 11px; border-radius: 99px; border: 1px solid var(--line-strong);
+    cursor: pointer; margin: 0 6px 6px 0; user-select: none; background: var(--panel); }
+  .tick input { margin: 0; accent-color: var(--accent); }
+  .tick.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .req { color: var(--bad); }
+  .wishes { margin: 0 0 6px; padding-left: 18px; font-size: 14px; }
+  #mic.on { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
   .demo { border: 1px dashed var(--line-strong); border-radius: 12px; padding: 10px 12px; margin-top: 18px; font-size: 13px; }
   .funnel span { white-space: nowrap; }
 </style>
@@ -46,12 +55,20 @@
   </header>
 
   <div class="card ask">
-    <textarea id="msg" placeholder="I need 1,000 litres of lactose-free milk by Monday, max 1,200 €"></textarea>
+    <textarea id="msg" placeholder="I need 1,000 litres of lactose-free milk by Monday, max 1,200 €. Deliver to the back door."></textarea>
     <div class="row" style="justify-content:space-between">
-      <div class="hint">Say <b>what</b>, <b>how much</b> and <b>by when</b>. Add diet, allergies, who it's for, a budget and what matters most. English or Finnish.</div>
-      <button class="primary" id="find">Find</button>
+      <div class="hint">Write or say it in your own words (English or Finnish), or just fill in the boxes below.</div>
+      <div class="row">
+        <span id="voice" class="row" hidden>
+          <select id="voiceLang" aria-label="Speech language" style="padding:6px 8px"><option value="en-GB">EN</option><option value="fi-FI">FI</option></select>
+          <button id="mic" aria-label="Speak your request">🎤 Speak</button>
+        </span>
+        <button id="fill">Fill in from my request</button>
+      </div>
     </div>
   </div>
+
+  <div class="card crit" id="criteria"></div>
 
   <div id="status" style="margin-top:14px"></div>
   <div id="result"></div>
@@ -73,10 +90,18 @@ const num = (v) => Number(v).toLocaleString("en-GB", { maximumFractionDigits: 2 
 const DEMO = new URLSearchParams(location.search).has("demo");
 const CLAIMS = { FREE_FROM_LACTOSE: "Lactose-free", FREE_FROM_GLUTEN: "Gluten-free", VEGAN: "Vegan", FREE_FROM_EGGS: "Egg-free",
   LOW_LACTOSE: "Low-lactose", VEGETARIAN: "Vegetarian", FREE_FROM_SOY: "Soy-free", NO_ADDED_SUGARS: "No added sugar" };
-const ALLERGENS = { AM: "milk", AW: "gluten", AE: "egg", AP: "peanuts", AN: "tree nuts", SH: "hazelnut", AY: "soy", AF: "fish", AS: "sesame", AC: "crustaceans" };
+const ALLERGENS = { AM: "milk", AW: "gluten", AE: "egg", AP: "peanuts", AN: "tree nuts", SH: "hazelnut", AY: "soy", AF: "fish",
+  AS: "sesame", AC: "crustaceans", UM: "molluscs", BC: "celery", BM: "mustard", NL: "lupin", AU: "sulphites" };
 const PRIORITY = { price: "Cheapest", reliability: "Most reliable", low_co2: "Lowest CO₂" };
+const FINNISH = ["GOODS_FROM_FINLAND_BLUE_SWAN", "MADE_IN_FINLAND_FLAG_WITH_KEY", "FINNISH_HEART_SYMBOL"], ORGANIC = ["EU_ORGANIC_FARMING"];
+const MAIN_CLAIMS = ["FREE_FROM_LACTOSE", "FREE_FROM_GLUTEN", "VEGAN", "FREE_FROM_EGGS"], MAIN_ALLERGENS = ["AM", "AW", "AE", "AP", "AN", "SH"];
 
 let buyers = [], last = null, itemIdx = 0, planIdx = 0, draft = [], quote = null, quoteTimer = null, quoteSeq = 0, editing = false, sent = null;
+const blankItem = () => ({ label: "", product_terms: [], quantity: null, unit: "L", must_claims: [], exclude_allergens: [],
+  strict_allergens: false, preferred_labels: [], substitutes: [] });
+const blankNeed = () => ({ items: [blankItem()], deliver_by: null, budget_eur: null, priorities: ["price"], other_wishes: [], language: "en" });
+let crit = blankNeed(), ci = 0, more = false, fillInfo = "";
+const cur = () => crit.items[ci];
 const buyerId = () => $("buyer").value;
 const res = () => last.results[itemIdx];
 const opt = (pid) => res().options.find(o => o.product_id === pid);
@@ -96,23 +121,100 @@ function stock(o) {
 }
 function dateText(iso) { return iso ? new Date(iso + "T12:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "–"; }
 
-// ------------------------------------------------------------------ lookup
-async function find(need) {
+// ------------------------------------------------------------------ criteria (tick boxes)
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+function tick(on, label, handler) {
+  return `<label class="tick ${on ? "on" : ""}"><input type="checkbox" ${on ? "checked" : ""} onchange="${handler}">${esc(label)}</label>`;
+}
+function renderCriteria() {
+  const it = cur();
+  const items = crit.items.length > 1 ? `<div class="row" style="margin-bottom:10px"><span class="faint">Your request has ${crit.items.length} products:</span>${crit.items.map((x, i) =>
+    `<button class="small ${i === ci ? "primary" : ""}" onclick="ci=${i};renderCriteria()">${esc(x.label || "Product " + (i + 1))}</button>`).join("")}</div>` : "";
+  const claims = [...new Set([...MAIN_CLAIMS, ...(more ? Object.keys(CLAIMS) : []), ...it.must_claims])];
+  const allergens = [...new Set([...MAIN_ALLERGENS, ...(more ? Object.keys(ALLERGENS) : []), ...it.exclude_allergens])];
+  const fin = it.preferred_labels.some(l => FINNISH.includes(l)) || crit.priorities.includes("finnish_origin");
+  const org = it.preferred_labels.some(l => ORGANIC.includes(l)) || crit.priorities.includes("organic");
+  const prio = Object.keys(PRIORITY).find(p => crit.priorities[0] === p) || "price";
+  $("criteria").innerHTML = `${fillInfo ? `<div class="banner" style="background:var(--soft);margin-bottom:12px;font-size:13px">${fillInfo}</div>` : ""}${items}
+    <div class="fields">
+      <label class="f"><span>Product <span class="req">*</span></span><input value="${esc(it.label)}" placeholder="lactose-free milk" onchange="setLabel(this.value)"></label>
+      <label class="f">Amount<div class="row" style="flex-wrap:nowrap;gap:6px"><input type="number" min="0" step="any" class="grow" value="${it.quantity ?? ""}" placeholder="1 pack"
+          onchange="cur().quantity = this.value ? Number(this.value) : null"><select onchange="cur().unit = this.value">${["L", "KG", "PCS"].map(u =>
+          `<option value="${u}" ${u === it.unit ? "selected" : ""}>${u === "PCS" ? "pieces" : u === "L" ? "litres" : "kg"}</option>`).join("")}</select></div></label>
+      <label class="f">Deliver by<input type="date" value="${crit.deliver_by || ""}" onchange="crit.deliver_by = this.value || null"></label>
+      <label class="f">Budget (€)<input type="number" min="0" step="any" value="${crit.budget_eur ?? ""}" placeholder="No limit" onchange="crit.budget_eur = this.value ? Number(this.value) : null"></label>
+    </div>
+    <div class="group"><div class="t">Must be</div>${claims.map(c => tick(it.must_claims.includes(c), CLAIMS[c] || c.toLowerCase().replace(/_/g, " "), `toggle('must_claims','${c}')`)).join("")}</div>
+    <div class="group"><div class="t">Avoid</div>${allergens.map(a => tick(it.exclude_allergens.includes(a), cap(ALLERGENS[a] || a), `toggle('exclude_allergens','${a}')`)).join("")}
+      ${tick(it.strict_allergens, "Strict allergy check (school, daycare, hospital)", "cur().strict_allergens = !cur().strict_allergens; renderCriteria()")}
+      <button class="ghost small" onclick="more = !more; renderCriteria()">${more ? "Fewer options" : "More options"}</button></div>
+    <div class="group"><div class="t">Prefer</div>${tick(fin, "Finnish", "togglePref('finnish')")}${tick(org, "Organic", "togglePref('organic')")}
+      <span class="faint" style="margin:0 6px 0 4px">What matters most:</span>${Object.entries(PRIORITY).map(([k, v]) =>
+        `<label class="tick ${prio === k ? "on" : ""}"><input type="radio" name="prio" ${prio === k ? "checked" : ""} onchange="setPrio('${k}')">${v}</label>`).join("")}</div>
+    <div class="group"><div class="t">Other wishes <span class="faint">· not a search filter; sent with the order so the approver sees it</span></div>
+      <ul class="wishes">${crit.other_wishes.map((w, i) => `<li>${esc(w)} <button class="ghost small" aria-label="Remove wish" onclick="crit.other_wishes.splice(${i}, 1); renderCriteria()">✕</button></li>`).join("")}</ul>
+      <input id="c_wish" placeholder="Add a wish and press Enter, e.g. deliver to the back door" style="width:100%" onkeydown="if (event.key === 'Enter') addWish(this.value)"></div>
+    <div id="c_err" style="color:var(--bad);font-size:13px;margin-top:8px"></div>
+    <div class="row" style="justify-content:space-between;margin-top:12px"><span class="faint">Only the product is required. Change anything before you search.</span>
+      <div class="row"><button class="ghost" onclick="clearCriteria()">Clear</button><button class="primary" id="find" onclick="find()">Find</button></div></div>`;
+}
+function setLabel(v) {
+  const it = cur(); v = v.trim();
+  if (v.toLowerCase() !== (it.label || "").toLowerCase()) { it.product_terms = v.split(/,| or /).map(s => s.trim()).filter(Boolean); it.substitutes = []; }
+  it.label = v; $("c_err").textContent = "";
+}
+function toggle(field, v) { const a = cur()[field], i = a.indexOf(v); i < 0 ? a.push(v) : a.splice(i, 1); renderCriteria(); }
+function togglePref(kind) {
+  const it = cur(), labels = kind === "finnish" ? FINNISH : ORGANIC, pr = kind === "finnish" ? "finnish_origin" : "organic";
+  if (it.preferred_labels.some(l => labels.includes(l)) || crit.priorities.includes(pr)) {
+    it.preferred_labels = it.preferred_labels.filter(l => !labels.includes(l)); crit.priorities = crit.priorities.filter(p => p !== pr);
+  } else it.preferred_labels = [...new Set([...it.preferred_labels, ...labels])];
+  renderCriteria();
+}
+function setPrio(k) { crit.priorities = [k, ...crit.priorities.filter(p => !(p in PRIORITY))]; renderCriteria(); }
+function addWish(v) { if (v.trim()) crit.other_wishes.push(v.trim()); renderCriteria(); $("c_wish").focus(); }
+function clearCriteria() { crit = blankNeed(); ci = 0; fillInfo = ""; renderCriteria(); }
+function setBusy(on, text) {
+  document.querySelectorAll("#fill, #find, #mic").forEach(b => b.disabled = on);
+  if (on) $("status").innerHTML = `<div class="banner" style="background:var(--soft)"><div class="spinner"></div>${esc(text)}</div>`;
+}
+
+async function fill() {
   const text = $("msg").value.trim();
-  if (!text && !need) { $("status").innerHTML = `<div class="banner warn">Say what you need first, for example "24 litres of oat drink by Monday".</div>`; return; }
-  $("find").disabled = true; editing = false; sent = null; quote = null;
-  $("status").innerHTML = `<div class="banner" style="background:var(--soft)"><div class="spinner"></div>Finding the best way to get it… this takes about 20 seconds.</div>`;
-  $("result").innerHTML = "";
+  if (!text) { $("status").innerHTML = `<div class="banner warn">Write your request first, or fill in the boxes yourself.</div>`; return false; }
+  setBusy(true, "Reading your request… about 10 seconds.");
   try {
-    const r = await post("/api/demo/lookup", { buyer_id: buyerId(), message: text || last?.request || "", need: need || null });
+    const r = await post("/api/demo/understand", { buyer_id: buyerId(), message: text });
     if (r.error) throw new Error(r.error);
-    last = r; itemIdx = 0; $("status").innerHTML = "";
-    if (r.live_error) $("status").innerHTML = `<div class="banner bad">Valio's live stock and prices can't be reached right now, so nothing can be confirmed. Try again in a moment.</div>`;
+    const n = r.need;
+    crit = { items: n.items.map(it => ({ ...blankItem(), ...it })), deliver_by: n.deliver_by || null, budget_eur: n.budget_eur || null,
+             priorities: n.priorities && n.priorities.length ? n.priorities : ["price"], other_wishes: n.other_wishes || [], language: n.language || "en" };
+    ci = 0;
+    fillInfo = n.engine === "offline parser" ? "Filled in by the simple built-in reader because the AI isn't available right now. Please check carefully."
+      : "Filled in from your request. Check and change anything, then press Find.";
+    $("status").innerHTML = ""; renderCriteria(); return true;
+  } catch (e) { $("status").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; return false; }
+  finally { setBusy(false); }
+}
+
+// ------------------------------------------------------------------ lookup
+async function find() {
+  if (!crit.items.some(it => (it.label || "").trim()) && $("msg").value.trim()) { if (!(await fill())) return; }
+  const pending = $("c_wish") && $("c_wish").value.trim();
+  if (pending) { crit.other_wishes.push(pending); renderCriteria(); }
+  const items = crit.items.filter(it => (it.label || "").trim());
+  if (!items.length) { $("c_err").textContent = "Write which product you need. It's the only required box."; return; }
+  const need = { ...crit, items: items.map(it => ({ ...it, product_terms: it.product_terms.length ? it.product_terms : [it.label], quantity: it.quantity || 0 })) };
+  sent = null; quote = null; $("result").innerHTML = "";
+  setBusy(true, "Finding the best way to get it… about 20 seconds.");
+  try {
+    const r = await post("/api/demo/lookup", { buyer_id: buyerId(), message: $("msg").value.trim() || items.map(i => i.label).join(", "), need });
+    if (r.error) throw new Error(r.error);
+    last = r; itemIdx = 0;
+    $("status").innerHTML = r.live_error ? `<div class="banner bad">Valio's live stock and prices can't be reached right now, so nothing can be confirmed. Try again in a moment.</div>` : "";
     selectPlan(0);
-  } catch (e) {
-    $("status").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`;
-  }
-  $("find").disabled = false;
+  } catch (e) { $("status").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; }
+  finally { setBusy(false); }
 }
 
 function selectPlan(j) {
@@ -127,61 +229,15 @@ function selectPlan(j) {
 function render() {
   if (!last) return;
   const r = res();
-  $("result").innerHTML = understood() + plansHtml(r) + draftHtml(r) + checkoutHtml();
+  $("result").innerHTML = assumptionsHtml() + plansHtml(r) + draftHtml(r) + checkoutHtml();
   if (DEMO) demoStats();
 }
 
-function understood() {
-  const n = last.need, it = res().item;
-  if (editing) return editForm(n, it);
-  const chips = [`<span class="pill">${esc(it.label)}</span>`, `<span class="pill">${num(it.quantity)} ${esc(it.unit)}</span>`];
-  it.must_claims.forEach(c => chips.push(`<span class="pill">${esc(CLAIMS[c] || c.toLowerCase().replace(/_/g, " "))}</span>`));
-  it.exclude_allergens.forEach(a => chips.push(`<span class="pill">No ${esc(ALLERGENS[a] || a)}</span>`));
-  if (it.strict_allergens) chips.push(`<span class="pill accent">Strict allergy check</span>`);
-  const assumed = (last.assumptions || []).map(a => a.field);
-  chips.push(`<span class="pill ${assumed.includes("deliver_by") ? "warn" : ""}">${assumed.includes("deliver_by") ? "⚠ " : ""}By ${dateText(last.deliver_by)}</span>`);
-  chips.push(last.budget_eur ? `<span class="pill">Max ${num(last.budget_eur)} €</span>` : `<span class="pill warn">⚠ No budget set</span>`);
-  if ((n.priorities || [])[0] && n.priorities[0] !== "price") chips.push(`<span class="pill">${esc(PRIORITY[n.priorities[0]] || n.priorities[0])} first</span>`);
-  const items = last.results.length > 1 ? `<div class="row" style="margin-bottom:8px">${last.results.map((x, i) =>
+function assumptionsHtml() {
+  const items = last.results.length > 1 ? `<div class="row" style="margin-top:18px"><span class="faint">Results for</span>${last.results.map((x, i) =>
     `<button class="small ${i === itemIdx ? "primary" : ""}" onclick="itemIdx=${i};selectPlan(0)">${esc(x.item.label)}</button>`).join("")}</div>` : "";
-  return `<h2>Here's what I understood</h2>${items}<div class="row">${chips.join("")}<button class="ghost" onclick="editing=true;render()">Change</button></div>`;
-}
-
-function editForm(n, it) {
-  const claimKeys = [...new Set([...Object.keys(CLAIMS).slice(0, 4), ...it.must_claims])];
-  const allergenKeys = [...new Set([...Object.keys(ALLERGENS), ...it.exclude_allergens])];
-  return `<h2>Change the details</h2><div class="card"><div class="edit">
-    <label>Product<input id="e_label" value="${esc(it.label)}"></label>
-    <label>Amount<div class="row" style="flex-wrap:nowrap"><input id="e_qty" type="number" min="0" step="any" value="${it.quantity}" class="grow">
-      <select id="e_unit">${["L", "KG", "PCS"].map(u => `<option ${u === it.unit ? "selected" : ""}>${u}</option>`).join("")}</select></div></label>
-    <label>Deliver by<input id="e_date" type="date" value="${esc(last.deliver_by)}"></label>
-    <label>Budget (€, optional)<input id="e_budget" type="number" min="0" step="any" value="${last.budget_eur ?? ""}" placeholder="No limit"></label>
-    <label>What matters most<select id="e_prio">${Object.entries(PRIORITY).map(([k, v]) => `<option value="${k}" ${(n.priorities || [])[0] === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-  </div>
-  <div style="margin-top:12px" class="muted">Must be</div>
-  <div class="checks">${claimKeys.map(c => `<label class="pill"><input type="checkbox" name="claim" value="${c}" ${it.must_claims.includes(c) ? "checked" : ""}>${esc(CLAIMS[c] || c)}</label>`).join("")}</div>
-  <div style="margin-top:10px" class="muted">Avoid</div>
-  <div class="checks">${allergenKeys.map(a => `<label class="pill"><input type="checkbox" name="allergen" value="${a}" ${it.exclude_allergens.includes(a) ? "checked" : ""}>${esc(ALLERGENS[a] || a)}</label>`).join("")}
-    <label class="pill accent"><input type="checkbox" id="e_strict" ${it.strict_allergens ? "checked" : ""}>Strict allergy check (school, hospital)</label></div>
-  <div id="e_err" class="muted" style="color:var(--bad);margin-top:8px"></div>
-  <div class="row" style="margin-top:12px;justify-content:flex-end"><button onclick="editing=false;render()">Cancel</button><button class="primary" onclick="searchAgain()">Search again</button></div></div>`;
-}
-
-function searchAgain() {
-  const it = res().item, label = $("e_label").value.trim(), qty = parseFloat($("e_qty").value);
-  if (!label) { $("e_err").textContent = "Say which product."; return; }
-  if (!(qty > 0)) { $("e_err").textContent = "Enter an amount above 0."; return; }
-  const same = label.toLowerCase() === it.label.toLowerCase();
-  const item = { ...it, label, quantity: qty, unit: $("e_unit").value,
-    product_terms: same ? it.product_terms : label.split(/,| or /).map(s => s.trim()).filter(Boolean),
-    substitutes: same ? it.substitutes : [],
-    must_claims: [...document.querySelectorAll("input[name=claim]:checked")].map(x => x.value),
-    exclude_allergens: [...document.querySelectorAll("input[name=allergen]:checked")].map(x => x.value),
-    strict_allergens: $("e_strict").checked };
-  const items = last.results.map((x, i) => i === itemIdx ? item : x.item);
-  const budget = parseFloat($("e_budget").value);
-  find({ ...last.need, items, deliver_by: $("e_date").value || null, budget_eur: budget > 0 ? budget : null,
-         priorities: [$("e_prio").value] });
+  const a = (last.assumptions || []).filter(x => x.field !== "budget_eur");
+  return items + (a.length ? `<div class="banner warn" style="margin-top:14px;font-size:14px">⚠ ${a.map(x => esc(x.text)).join(" · ")}</div>` : "");
 }
 
 function planWhat(p) {
@@ -318,7 +374,7 @@ async function send() {
     (changed ? "The buyer adjusted the products or quantities. " : "") + p.why;
   try {
     const o = await post("/api/demo/order", { buyer_id: buyerId(), quote_id: quote.quote_id, reason,
-      is_substitute: draft.some(d => d.match !== "exact"), declared_risks: declaredRisks() });
+      is_substitute: draft.some(d => d.match !== "exact"), declared_risks: declaredRisks(), notes: last.need.other_wishes || [] });
     if (o.error) throw new Error(o.error);
     const link = `<a href="/orders?buyer=${buyerId()}" target="agentgate-orders">${esc(o.order_id)}</a>`;
     sent = o.status === "confirmed" ? `<div class="banner ok">✓ Order ${link} placed: ${eur(o.total_eur)}, delivery ${dateText(o.deliver_by)}.</div>`
@@ -354,8 +410,37 @@ function demoStats() {
     <div>Plan scores: ${r.plans.map(p => `${esc(p.label)} ${p.score} (certainty ${p.certainty}, match ${p.fidelity})`).join(" · ")}</div>`;
 }
 
-$("find").onclick = () => find(null);
-$("msg").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); find(null); } });
+$("fill").onclick = () => fill();
+
+// Voice: speak the request (hands-free), then the boxes are filled in from it. Uses the browser's own
+// speech recognition (Chrome, Edge); the button is hidden where the browser doesn't offer it.
+const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (Speech) {
+  $("voice").hidden = false;
+  let rec = null, before = "";
+  $("mic").onclick = () => {
+    if (rec) { rec.stop(); return; }
+    rec = new Speech(); rec.lang = $("voiceLang").value; rec.interimResults = true; rec.continuous = false;
+    before = $("msg").value.trim(); let heard = "";
+    $("mic").classList.add("on"); $("mic").textContent = "■ Stop";
+    $("status").innerHTML = `<div class="banner" style="background:var(--soft)"><div class="spinner"></div>Listening… say what, how much and by when.</div>`;
+    rec.onresult = (e) => {
+      heard = [...e.results].map(r => r[0].transcript).join(" ");
+      $("msg").value = (before ? before + " " : "") + heard;
+    };
+    rec.onerror = (e) => {
+      $("status").innerHTML = `<div class="banner bad">${e.error === "not-allowed" ? "Microphone access was blocked. Allow it in the browser to speak your request."
+        : e.error === "no-speech" ? "I didn't hear anything. Try again." : "Speech input stopped: " + esc(e.error)}</div>`;
+    };
+    rec.onend = () => {
+      rec = null; $("mic").classList.remove("on"); $("mic").textContent = "🎤 Speak";
+      if (heard.trim()) fill(); else if ($("status").textContent.startsWith("Listening")) $("status").innerHTML = "";
+    };
+    rec.start();
+  };
+}
+$("msg").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); fill(); } });
+renderCriteria();
 $("buyer").onchange = () => { onBuyer(); if (last && draft.length) { quote = null; sent = null; render(); requestQuote(); } };
 if (DEMO) {
   $("demo").hidden = false;
@@ -364,7 +449,8 @@ if (DEMO) {
     const r = await post("/api/demo/rogue", { buyer_id: buyerId() });
     $("demoOut").innerHTML = `<ul style="margin:0;padding-left:18px">${r.steps.map(s => `<li>${esc(s.attempt)} → <b>${esc(s.result.status || (s.result.error ? "refused" : "?"))}</b>: ${esc(s.result.error || s.result.policy?.reasons.join(" ") || "")}</li>`).join("")}</ul>`;
   };
-  $("reset").onclick = async () => { await post("/api/demo/reset", {}); last = null; $("result").innerHTML = ""; $("status").innerHTML = ""; $("demoOut").textContent = "Demo reset."; loadBuyers(); };
+  $("reset").onclick = async () => { await post("/api/demo/reset", {}); last = null; $("result").innerHTML = ""; $("status").innerHTML = ""; $("msg").value = "";
+    clearCriteria(); $("demoOut").textContent = "Demo reset."; loadBuyers(); };
 }
 loadBuyers(); setInterval(pollOrders, 5000);
 </script>

@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 
 from . import core
+from . import understand as und
 
 
 def _safe(fn, *args, **kwargs):
@@ -21,12 +22,27 @@ def _safe(fn, *args, **kwargs):
 ASSISTANT = "valio-assistant"   # Valio's own buying assistant (the web page) is one agent among others
 
 
+def understand(buyer_id: str, request: str) -> dict:
+    """Only read the request into criteria (no search, no live calls), so the buyer can check and change them."""
+    try:
+        core.check_agent(buyer_id, ASSISTANT)
+    except core.WholesalerError as exc:
+        return {"error": str(exc)}
+    if not request.strip():
+        return {"error": "Write what you need first."}
+    need = und.understand(request, core.today())
+    usage = need.pop("usage", None)
+    core.audit(f"user:{buyer_id}", "request", request)
+    return {"need": need, "ai_usage": {"calls": 1 if usage else 0, "usd": usage["usd"] if usage else 0}}
+
+
 def lookup(buyer_id: str, request: str, need: dict | None = None) -> dict:
     try:
         core.check_agent(buyer_id, ASSISTANT)
     except core.WholesalerError as exc:
         return {"error": str(exc)}
-    core.audit(f"user:{buyer_id}", "request", request if not need else f"Search again with edited details: {request}")
+    if not need:
+        core.audit(f"user:{buyer_id}", "request", request)
     return _safe(core.smart_lookup, buyer_id, request, need)
 
 
@@ -46,12 +62,13 @@ def quote(buyer_id: str, lines: list[dict], deliver_by: str, is_substitute: bool
     return q
 
 
-def order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool, declared_risks: list[str]) -> dict:
+def order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool, declared_risks: list[str],
+          notes: list[str] | None = None) -> dict:
     try:
         core.check_agent(buyer_id, ASSISTANT)
     except core.WholesalerError as exc:
         return {"error": str(exc)}
-    return _safe(core.place_order, buyer_id, quote_id, reason, is_substitute, declared_risks)
+    return _safe(core.place_order, buyer_id, quote_id, reason, is_substitute, declared_risks, notes)
 
 
 def order_plan(buyer_id: str, lines: list[dict], deliver_by: str, reason: str, is_substitute: bool = False,

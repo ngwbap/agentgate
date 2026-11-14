@@ -56,9 +56,12 @@ NEED_SCHEMA = {
         "budget_eur": {"type": ["number", "null"],
                        "description": "Maximum total in EUR the buyer mentioned (e.g. 'max 1,200 €'), or null if none"},
         "priorities": {"type": "array", "items": {"type": "string", "enum": PRIORITIES}},
+        "other_wishes": {"type": "array", "items": {"type": "string"},
+                         "description": "Anything else the buyer asked for that none of the other fields can hold "
+                                        "(e.g. 'deliver to the back door'), as short English phrases. Empty if none."},
         "language": {"type": "string", "enum": ["en", "fi", "sv", "other"]},
     },
-    "required": ["items", "deliver_by", "budget_eur", "priorities", "language"],
+    "required": ["items", "deliver_by", "budget_eur", "priorities", "other_wishes", "language"],
     "additionalProperties": False,
 }
 
@@ -71,7 +74,9 @@ SYSTEM = (
     "substitutes are other product types for the same culinary purpose (not other brands or fat levels of the same "
     "product); dietary and allergen requirements still apply to them, so never suggest one that cannot meet them. "
     "Set strict_allergens for allergies and for school, daycare or hospital kitchens. "
-    "Put a stated spending limit in budget_eur; leave deliver_by and budget_eur null when not stated."
+    "Put a stated spending limit in budget_eur; leave deliver_by and budget_eur null when not stated. "
+    "A wish for Finnish products goes in preferred_labels (Finnish labels) and priorities (finnish_origin); organic "
+    "likewise. Put every remaining wish that no field can hold in other_wishes, never drop it."
 )
 
 
@@ -101,12 +106,16 @@ _FI_EN = {"maito": "milk", "maitoa": "milk", "kaurajuoma": "oat drink", "kauraju
 _CLAIM_WORDS = {"lactose-free": "FREE_FROM_LACTOSE", "lactose free": "FREE_FROM_LACTOSE", "laktoositon": "FREE_FROM_LACTOSE",
                 "laktoositonta": "FREE_FROM_LACTOSE", "gluten-free": "FREE_FROM_GLUTEN", "gluten free": "FREE_FROM_GLUTEN",
                 "gluteeniton": "FREE_FROM_GLUTEN", "gluteenitonta": "FREE_FROM_GLUTEN", "vegan": "VEGAN", "vegaaninen": "VEGAN"}
-_ALLERGEN_WORDS = {"nut": "AN", "nuts": "AN", "pähkinä": "AN", "peanut": "AP", "peanuts": "AP", "egg": "AE",
-                   "eggs": "AE", "soy": "AY", "fish": "AF", "sesame": "AS", "milk": "AM"}
+_ALLERGEN_WORDS = {"nut": "AN", "nuts": "AN", "pähkinä": "AN", "peanut": "AP", "peanuts": "AP", "maapähkinä": "AP",
+                   "egg": "AE", "eggs": "AE", "soy": "AY", "fish": "AF", "sesame": "AS", "milk": "AM",
+                   "hazelnut": "SH", "hazelnuts": "SH", "hasselpähkinä": "SH", "gluten": "AW", "wheat": "UW",
+                   "mustard": "BM", "celery": "BC", "shellfish": "AC", "crustaceans": "AC", "lupin": "NL"}
+_WISH_START = ("deliver", "delivery", "please", "call", "leave", "ring", "bring", "toimita", "toimitus", "soita")
 _STOP = {"i", "we", "need", "please", "buy", "order", "get", "of", "by", "the", "a", "an", "for", "find", "option",
          "that", "meets", "our", "requirements", "based", "on", "price", "and", "availability", "next", "before",
          "until", "tarvitsen", "tarvitaan", "mennessä", "ensi", "tilaa", "no", "without", "free", "lactose",
-         "gluten", "kitchen", "hotel", "school", "hospital", "with", "some", "about"}
+         "gluten", "kitchen", "hotel", "school", "hospital", "with", "some", "about", "needs", "our", "us",
+         "pupil", "child", "children", "kids", "has", "have", "allergy", "allergic", "allergies", "is", "are"}
 
 
 _BUDGET = re.compile(r"(?:max(?:imum)?|budget(?: of)?|under|up to|at most|enintään|maks(?:imissaan)?|alle)\s*"
@@ -118,7 +127,11 @@ def _number(text: str) -> float:
 
 
 def parse_offline(request: str, today: date) -> dict:
-    text = request.lower()
+    # Sentences like "Deliver to the back door." are wishes for people, not search words.
+    wishes, kept = [], []
+    for sentence in re.split(r"(?<=[.!?])\s+", request.strip()):
+        (wishes if sentence.lower().startswith(_WISH_START) else kept).append(sentence)
+    text = " ".join(kept).lower()
     budget = None
     if b := _BUDGET.search(text):
         budget = _number(b.group(1) or b.group(2))
@@ -138,8 +151,17 @@ def parse_offline(request: str, today: date) -> dict:
                 break
     claims = sorted({c for w, c in _CLAIM_WORDS.items() if w in text})
     exclude = sorted({code for w, code in _ALLERGEN_WORDS.items()
-                      if re.search(rf"\b(no|without|free of|ilman)\s+{w}\b", text) or f"{w}-free" in text})
-    words = [w for w in re.findall(r"[a-zäöå-]+", text)
+                      if re.search(rf"\b(no|without|free of|ilman)\s+{w}\b", text) or f"{w}-free" in text
+                      or re.search(rf"\b{w}\s+allerg", text) or re.search(rf"allergic\s+to\s+{w}\b", text)})
+    # The product is usually named right after the amount: "40 kg of chocolate cookies by Monday".
+    source = text
+    if qty_match:
+        unit_word = (qty_match.group(2) or "").strip()
+        rest = text[qty_match.end():] if unit_word in _UNIT_WORDS else text[qty_match.end(1):]
+        clause = re.split(r"\b(?:by|before|until|for|mennessä|ennen)\b|[,.;!?]", rest, maxsplit=1)[0]
+        if re.search(r"[a-zäöå]", clause):
+            source = clause
+    words = [w for w in re.findall(r"[a-zäöå-]+", source)
              if w not in _STOP and w not in _UNIT_WORDS and not any(w.startswith(n) for p in _WEEKDAYS for n in p)
              and w not in _CLAIM_WORDS]
     terms = []
@@ -147,7 +169,10 @@ def parse_offline(request: str, today: date) -> dict:
         terms.append(_FI_EN.get(w, w))
     product = " ".join(dict.fromkeys(terms)) or "product"
     return {
-        "items": [{"label": product, "product_terms": list(dict.fromkeys([product, *words])), "quantity": quantity,
+        # Search for the whole name ("chocolate cookies" = both words), plus the Finnish words we translated,
+        # never each English word alone ("chocolate" alone would bring every chocolate bar).
+        "items": [{"label": product, "product_terms": list(dict.fromkeys([product, *[w for w in words if w in _FI_EN]])),
+                   "quantity": quantity,
                    "unit": unit, "must_claims": claims, "exclude_allergens": exclude,
                    "strict_allergens": any(w in text for w in ("allergy", "allergic", "school", "hospital", "daycare",
                                                                 "koulu", "sairaala", "päiväkoti", "allergia")),
@@ -155,6 +180,7 @@ def parse_offline(request: str, today: date) -> dict:
         "deliver_by": deliver_by,
         "budget_eur": budget,
         "priorities": ["price"],
+        "other_wishes": [w.strip().rstrip(".!") for w in wishes if w.strip()],
         "language": "fi" if re.search(r"[äö]|tarvitsen|litraa", text) else "en",
     }
 
@@ -195,8 +221,26 @@ RELEVANCE_SYSTEM = (
 )
 
 
+def _has_word(word: str, text_tokens: list[str]) -> bool:
+    """Does the product name contain this word (allowing plural endings and Finnish compounds)?"""
+    w = word.lower()
+    stem = w if len(w) <= 4 else w[: max(4, len(w) - 2)]
+    return any(t.startswith(stem) or (len(stem) >= 5 and stem in t) for t in text_tokens)
+
+
+def _offline_match(item: dict, c: dict) -> tuple[str, str]:
+    """Without the AI: exact if every word of the product appears, close if the main noun (last word) does."""
+    tokens = re.findall(r"[a-zåäöéü]+", f"{c['name']} {c['name_fi']}".lower())
+    words = [w for w in re.findall(r"[a-zåäöéü]+", item["label"].lower()) if len(w) > 2] or [item["label"].lower()]
+    if all(_has_word(w, tokens) for w in words):
+        return "exact", "name matches the request"
+    if _has_word(words[-1], tokens):
+        return "close", f"a kind of {words[-1]}, not exactly as asked"
+    return "different", f"not a {item['label']}"
+
+
 def judge_relevance(item: dict, candidates: list[dict],
-                    substitute_candidates: list[dict] = ()) -> tuple[dict[str, dict], dict | None]:
+                    substitute_candidates: list[dict] = (), valio_ids=()) -> tuple[dict[str, dict], dict | None]:
     """{product_id: {match, reason}} for the primary candidates and the substitute ideas, in ONE Claude call.
 
     substitute_candidates = [{"product": p, "label": ..., "trade_off": ...}] found for the need's substitutes.
@@ -220,12 +264,12 @@ def judge_relevance(item: dict, candidates: list[dict],
                 return result, usage
         except llm.LLMUnavailable:
             pass
-    terms = [t.lower() for t in item["product_terms"]]
     result = {}
     for c in candidates:
-        hit = any(t in f"{c['name']} {c['name_fi']}".lower() for t in terms)
-        result[c["id"]] = {"match": "exact" if hit else "close",
-                           "reason": "name matches the request" if hit else "related product"}
+        match, reason = _offline_match(item, c)
+        if match == "different" and c["id"] in valio_ids:       # Valio itself lists it as a replacement
+            match, reason = "close", "Valio lists it as a replacement"
+        result[c["id"]] = {"match": match, "reason": reason}
     for s in substitute_candidates:
         result.setdefault(s["product"]["id"], {"match": "substitute", "reason": s["trade_off"] or f"{s['label']} instead"})
     return result, None

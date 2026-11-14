@@ -498,17 +498,21 @@ def normalise_need(need: dict, today: date) -> dict:
     """A need edited by the buyer in the UI: fill gaps and keep only known values."""
     out = {"items": [], "deliver_by": need.get("deliver_by") or None, "budget_eur": need.get("budget_eur") or None,
            "priorities": [p for p in need.get("priorities") or [] if p in und.PRIORITIES] or ["price"],
-           "language": need.get("language") or "en", "engine": "edited by the buyer", "usage": None}
+           "other_wishes": [str(w).strip()[:200] for w in need.get("other_wishes") or [] if str(w).strip()][:10],
+           "language": need.get("language") or "en", "engine": "the buyer's criteria", "usage": None}
     if out["deliver_by"]:
         date.fromisoformat(out["deliver_by"])                     # raises ValueError on a bad date
     for it in need.get("items") or []:
         label = str(it.get("label") or "").strip()
         terms = [t.strip() for t in it.get("product_terms") or [] if str(t).strip()] or ([label] if label else [])
-        if not terms or float(it.get("quantity") or 0) <= 0:
+        if not terms:
             continue
+        qty = float(it.get("quantity") or 0)
+        amount_given = qty > 0                 # only the product is required; without an amount, price one pack
         out["items"].append({
-            "label": label or terms[0], "product_terms": terms, "quantity": float(it["quantity"]),
-            "unit": it.get("unit") if it.get("unit") in und.UNITS else "PCS",
+            "label": label or terms[0], "product_terms": terms, "quantity": qty if amount_given else 1.0,
+            "unit": (it.get("unit") if it.get("unit") in und.UNITS else "PCS") if amount_given else "PCS",
+            "amount_given": amount_given,
             "must_claims": [c for c in it.get("must_claims") or [] if c in CLAIM_NAMES],
             "exclude_allergens": [a for a in it.get("exclude_allergens") or [] if a in ALLERGENS],
             "strict_allergens": bool(it.get("strict_allergens")),
@@ -516,7 +520,7 @@ def normalise_need(need: dict, today: date) -> dict:
             "substitutes": [s for s in it.get("substitutes") or [] if s.get("product_terms")][:2],
         })
     if not out["items"]:
-        raise ValueError("Say what you need and how much.")
+        raise ValueError("Say which product you need.")
     return out
 
 
@@ -564,6 +568,8 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
                             "text": f"No date given, so I assumed {date.fromisoformat(deliver_by).strftime('%a %d %b')}"})
     if not budget:
         assumptions.append({"field": "budget_eur", "text": "No budget set"})
+    if any(it.get("amount_given") is False for it in need["items"]):
+        assumptions.insert(0, {"field": "quantity", "text": "No amount given, so prices are for one pack"})
     usage = [need["usage"]] if need.get("usage") else []
     priorities = need.get("priorities") or []
 
@@ -598,7 +604,7 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
             taken |= {p["id"] for p in picked}
             sub_cands += [{"product": p, "label": idea["label"], "trade_off": idea["trade_off"]} for p in picked]
             ideas.append({"label": idea["label"], "trade_off": idea["trade_off"], "candidates": len(picked)})
-        relevance, rel_usage = und.judge_relevance(item, cands, sub_cands)   # ONE call for both groups
+        relevance, rel_usage = und.judge_relevance(item, cands, sub_cands, set(valio_for))   # ONE call for both groups
         if rel_usage:
             usage.append(rel_usage)
         everything = cands + [s["product"] for s in sub_cands]

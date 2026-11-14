@@ -449,8 +449,10 @@ def _approve_by(quote: dict) -> str | None:
 
 
 def place_order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool = False,
-                declared_risks: list[str] | None = None) -> dict:
+                declared_risks: list[str] | None = None, notes: list[str] | None = None) -> dict:
+    """notes: the buyer's other wishes (e.g. 'deliver to the back door'). Shown to people, never a rule."""
     declared_risks = _clean_risks(declared_risks)
+    notes = _clean_risks(notes)
     with _lock:
         buyer = store.buyers[buyer_id]
         check_mandate(buyer)
@@ -470,7 +472,8 @@ def place_order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool =
             "order_id": store.next_id("O"), "buyer_id": buyer_id, "buyer_name": buyer["name"],
             "mandate_id": buyer["mandate"]["id"], "quote_id": quote_id, "lines": quote["lines"],
             "total_eur": quote["total_eur"], "deliver_by": quote["deliver_by"], "agent_reason": reason,
-            "is_substitute": is_substitute, "declared_risks": declared_risks, "policy": decision, "status": status,
+            "is_substitute": is_substitute, "declared_risks": declared_risks, "notes": notes,
+            "policy": decision, "status": status,
             "approve_by": _approve_by(quote) if status == "pending_approval" else None,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "decided_by": "door (automatic)" if status != "pending_approval" else None,
