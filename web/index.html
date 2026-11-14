@@ -253,8 +253,11 @@ async function fill() {
     crit = { items: n.items.map(it => ({ ...blankItem(), ...it })), deliver_by: n.deliver_by || null, budget_eur: n.budget_eur || null,
              priorities: n.priorities && n.priorities.length ? n.priorities : ["price"], other_wishes: n.other_wishes || [], language: n.language || "en" };
     ci = 0;
-    fillInfo = n.engine === "offline parser" ? "Filled in by the simple built-in reader because the AI isn't available right now. Please check carefully."
-      : "Filled in from your request. Check and change anything, then press Find.";
+    // The request box is cleared for the next request; what was asked stays visible here.
+    fillInfo = `Filled in from “${esc(text.replace(/[.!?\s]+$/, ""))}”. ` + (n.engine === "offline parser"
+      ? "The AI isn't available right now, so the simple built-in reader did this. Please check carefully."
+      : "Check and change anything, then press Find.");
+    $("msg").value = "";
     $("status").innerHTML = ""; renderCriteria(); markStale(); return true;
   } catch (e) { $("status").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; return false; }
   finally { setBusy(false); }
@@ -506,26 +509,50 @@ $("criteria").addEventListener("change", markStale);      // any box edited (amo
 const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
 if (Speech) {
   $("voice").hidden = false;
-  let rec = null, before = "";
-  $("mic").onclick = () => {
-    if (rec) { rec.stop(); return; }
-    rec = new Speech(); rec.lang = $("voiceLang").value; rec.interimResults = true; rec.continuous = false;
-    before = $("msg").value.trim(); let heard = "";
-    $("mic").classList.add("on"); $("mic").textContent = "■ Stop";
-    $("status").innerHTML = `<div class="banner" style="background:var(--soft)"><div class="spinner"></div>Listening… say what, how much and by when.</div>`;
+  // Keeps listening through pauses. Ends when the buyer presses Stop, or after SILENCE_MS of quiet once
+  // something was said (hands-free). Chrome may end a session on its own; then it quietly restarts.
+  const SILENCE_MS = 4000, MAX_MS = 120000;
+  let rec = null, listening = false, before = "", finalText = "", interim = "", silence = null, startedAt = 0, fatal = false;
+  const show = () => { $("msg").value = [before, finalText, interim].filter(Boolean).join(" ").replace(/\s+/g, " ").trim(); };
+  const armSilence = () => { clearTimeout(silence); if ((finalText + interim).trim()) silence = setTimeout(stopListening, SILENCE_MS); };
+  function startSession() {
+    rec = new Speech(); rec.lang = $("voiceLang").value; rec.interimResults = true; rec.continuous = true;
     rec.onresult = (e) => {
-      heard = [...e.results].map(r => r[0].transcript).join(" ");
-      $("msg").value = (before ? before + " " : "") + heard;
+      interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalText += " " + e.results[i][0].transcript; else interim += e.results[i][0].transcript;
+      }
+      show(); armSilence();
     };
     rec.onerror = (e) => {
-      $("status").innerHTML = `<div class="banner bad">${e.error === "not-allowed" ? "Microphone access was blocked. Allow it in the browser to speak your request."
-        : e.error === "no-speech" ? "I didn't hear anything. Try again." : "Speech input stopped: " + esc(e.error)}</div>`;
+      if (e.error === "no-speech" || e.error === "aborted") return;           // just quiet; keep going
+      fatal = true;
+      $("status").innerHTML = `<div class="banner bad">${e.error === "not-allowed" || e.error === "service-not-allowed"
+        ? "Microphone access was blocked. Allow it in the browser to speak your request."
+        : e.error === "network" ? "Speech recognition needs an internet connection. Type the request instead."
+        : "Speech input stopped (" + esc(e.error) + "). Try again or type the request."}</div>`;
     };
     rec.onend = () => {
-      rec = null; $("mic").classList.remove("on"); $("mic").textContent = "🎤 Speak";
-      if (heard.trim()) fill(); else if ($("status").textContent.startsWith("Listening")) $("status").innerHTML = "";
+      if (listening && !fatal && Date.now() - startedAt < MAX_MS) { try { startSession(); return; } catch (err) { /* fall through */ } }
+      finish();
     };
     rec.start();
+  }
+  function stopListening() { listening = false; clearTimeout(silence); if (rec) rec.stop(); }
+  function finish() {
+    const said = (finalText + " " + interim).trim();
+    rec = null; listening = false; clearTimeout(silence); interim = ""; show();
+    $("mic").classList.remove("on"); $("mic").textContent = "🎤 Speak";
+    if (said && !fatal) fill();
+    else if (!fatal && $("status").textContent.startsWith("Listening")) $("status").innerHTML = "";
+  }
+  $("mic").onclick = () => {
+    if (listening) { stopListening(); return; }
+    listening = true; fatal = false; before = $("msg").value.trim(); finalText = ""; interim = ""; startedAt = Date.now();
+    $("mic").classList.add("on"); $("mic").textContent = "■ Stop";
+    $("status").innerHTML = `<div class="banner" style="background:var(--soft)"><div class="spinner"></div>Listening… say what, how much and by when. Pause for 4 seconds or press Stop when you're done.</div>`;
+    try { startSession(); } catch (err) { fatal = true; finish(); }
+    setTimeout(() => { if (listening && !(finalText + interim).trim()) stopListening(); }, 10000);   // nothing said at all
   };
 }
 $("msg").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); fill(); } });
