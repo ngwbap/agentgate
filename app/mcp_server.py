@@ -12,7 +12,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import core
 
-BUYER = core.buyer_by_key(os.environ.get("WHOLESALER_AGENT_KEY", "demo-key-aurora"))
+BUYER, AGENT = core.agent_by_key(os.environ.get("WHOLESALER_AGENT_KEY", "demo-key-aurora"))
 BUYER_ID = BUYER["id"]
 
 mcp = FastMCP("valio-aimo-agentgate")
@@ -20,6 +20,7 @@ mcp = FastMCP("valio-aimo-agentgate")
 
 def _wrap(fn, *args):
     try:
+        core.check_agent(BUYER_ID, AGENT["id"])
         return fn(*args)
     except core.WholesalerError as exc:
         return {"error": str(exc)}

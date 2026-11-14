@@ -20,7 +20,8 @@ deliverable options**, and lets any agent order them **only within the buyer's m
 Every option shows its **evidence**: price API validity, availability timestamp, product-data date and GTIN, and the reliability and CO2 sources.
 
 ## The door (guardrails)
-- **Agent mandate** issued by the buyer: auto-approve limit, hard limit, food only, max lead time, validity, and an instant **Revoke**.
+- **Agent mandate** issued by the buyer: **"always ask me"** (on by default: a human confirms every order), auto-approve limit, hard limit, food only, max lead time, validity. Each connected agent can be **paused** on its own.
+- **Approve with changes:** the approver can change amounts; the order is re-priced live and Valio's hard rules still apply.
 - **Human approval** above the limit, for **unusual quantities** vs. the buyer's normal week, when a **supplier cutoff has passed**, for substitutes, or for **any risk the agent declares itself** (`declared_risks`). An agent can only add caution, never remove a rule.
 - **Need-to-know.** Agents never see other customers or internal data, and searches are throttled.
 - **Hash-chained audit log**, plus a verifiable receipt for every order.
@@ -46,7 +47,10 @@ CLAUDE_MODEL=claude-opus-5-5   # optional
 venv\Scripts\python.exe scripts\download_data.py   # Valio's data files -> data/valio/ (Junction use only, never committed)
 venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
 ```
-UI: http://127.0.0.1:8000 · API docs: http://127.0.0.1:8000/docs
+- **Buying assistant:** http://127.0.0.1:8000 (type a request, check what was understood, pick a way, adjust the draft order, send it)
+- **Orders and approvals:** http://127.0.0.1:8000/orders (approve, change, reject; history; agent settings and pause)
+- **Demo tools for the pitch:** http://127.0.0.1:8000/?demo (misbehaving agent, reset, the funnel and plan scores)
+- API docs: http://127.0.0.1:8000/docs
 
 **MCP** (Claude Desktop, Claude Code and others): `WHOLESALER_AGENT_KEY=demo-key-aurora python -m app.mcp_server`
 
@@ -60,8 +64,9 @@ UI: http://127.0.0.1:8000 · API docs: http://127.0.0.1:8000/docs
 | `app/llm.py` | Claude structured-JSON calls with cost accounting |
 | `app/core.py` | The door: mandate, quotes, orders, approvals, hash-chained audit |
 | `app/main.py` · `app/mcp_server.py` | HTTP API and MCP server |
-| `web/index.html` | Lookup funnel, option cards, approvals, audit trail |
-| `tests/` | 27 offline tests with a synthetic catalog and a fake Valio API |
+| `web/index.html` | Buying assistant: request, what was understood (editable), Best / Better / Good, draft order, live quote |
+| `web/orders.html` | Orders window: waiting / done, approve with changes, history, agent settings |
+| `tests/` | 39 offline tests with a synthetic catalog and a fake Valio API |
 
 ```bash
 venv\Scripts\python.exe -m pytest -q

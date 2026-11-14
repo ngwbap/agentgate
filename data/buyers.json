@@ -3,14 +3,18 @@
     {
       "id": "hotel-aurora",
       "name": "Hotel Aurora Helsinki (kitchen)",
-      "agent_key": "demo-key-aurora",
       "approver": "Kitchen manager",
       "customer_number": "100200",
+      "agents": [
+        {"id": "valio-assistant", "name": "Valio Aimo assistant", "key": "demo-assistant-aurora", "paused": false},
+        {"id": "own-agent", "name": "Hotel's own AI agent", "key": "demo-key-aurora", "paused": false}
+      ],
       "mandate": {
         "id": "MND-AURORA-01",
-        "agent_name": "Aurora purchasing agent",
+        "agent_name": "Aurora purchasing agents",
         "issued_by": "Kitchen manager",
         "valid_until": "2026-12-31",
+        "always_ask": true,
         "auto_approve_limit_eur": 1000,
         "hard_limit_eur": 10000,
         "food_only": true,
@@ -27,14 +31,18 @@
     {
       "id": "cafe-lumi",
       "name": "Cafe Lumi",
-      "agent_key": "demo-key-lumi",
       "approver": "Owner",
       "customer_number": "100300",
+      "agents": [
+        {"id": "valio-assistant", "name": "Valio Aimo assistant", "key": "demo-assistant-lumi", "paused": false},
+        {"id": "own-agent", "name": "Cafe's own AI agent", "key": "demo-key-lumi", "paused": false}
+      ],
       "mandate": {
         "id": "MND-LUMI-01",
-        "agent_name": "Lumi ordering assistant",
+        "agent_name": "Lumi purchasing agents",
         "issued_by": "Owner",
         "valid_until": "2026-12-31",
+        "always_ask": true,
         "auto_approve_limit_eur": 300,
         "hard_limit_eur": 3000,
         "food_only": true,

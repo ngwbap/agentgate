@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Valio Aimo orders</title>
+<link rel="stylesheet" href="/shared.css">
+<style>
+  .order { margin-bottom: 12px; }
+  .order.waiting { border-color: var(--warn-dot); }
+  .order .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .order .lines { margin: 10px 0; }
+  .order .ln { display: flex; gap: 10px; align-items: center; font-size: 14px; padding: 4px 0; }
+  .order .ln .amt { font-weight: 600; white-space: nowrap; }
+  .order .ln input { width: 80px; }
+  .actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .log { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  .log .who { color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; }
+  .hash { font-family: ui-monospace, monospace; font-size: 11px; color: var(--faint); }
+  .set { display: grid; grid-template-columns: 1fr auto; gap: 12px 16px; align-items: center; }
+  .set input[type=number] { width: 120px; }
+  .agent { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .switch { position: relative; width: 42px; height: 24px; flex: none; }
+  .switch input { opacity: 0; width: 100%; height: 100%; position: absolute; margin: 0; cursor: pointer; }
+  .switch span { position: absolute; inset: 0; background: var(--line-strong); border-radius: 99px; transition: .2s; pointer-events: none; }
+  .switch span::after { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(18px); }
+</style>
+</head>
+<body>
+<div class="wrap" style="max-width:760px">
+  <header class="top">
+    <div class="brand">Valio Aimo <span>· orders</span></div>
+    <div class="right"><select id="buyer" aria-label="Customer"></select></div>
+  </header>
+  <div class="muted" id="who"></div>
+  <div class="tabs" role="tablist">
+    <button data-tab="waiting" class="on">Waiting <span class="count" id="nWaiting" hidden></span></button>
+    <button data-tab="done">Done</button>
+    <button data-tab="history">History</button>
+    <button data-tab="settings">Agent settings</button>
+  </div>
+  <div id="msg"></div>
+  <div id="view"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const eur = (v) => v == null ? "–" : v.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+const dateText = (iso) => iso ? new Date(iso.slice(0, 10) + "T12:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "–";
+const STATUS = { pending_approval: ["warn", "Waiting for you"], confirmed: ["ok", "Confirmed"], rejected: ["bad", "Rejected"], cancelled: ["", "Withdrawn"] };
+const TAG_ICON = { money: "💶", quantity: "📦", delivery: "🚚", substitute: "🔁", agent: "🤖", settings: "✋", food: "⛔" };
+
+let tab = "waiting", buyers = [], orders = [], editingOrder = null, busy = false;
+const buyerId = () => $("buyer").value;
+const buyer = () => buyers.find(b => b.buyer_id === buyerId());
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || body.detail || r.statusText);
+  return body;
+}
+const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
+function flash(text, cls = "ok") { $("msg").innerHTML = `<div class="banner ${cls}" style="margin-bottom:12px">${esc(text)}</div>`; setTimeout(() => $("msg").innerHTML = "", 5000); }
+
+// ------------------------------------------------------------------ orders
+function tagsHtml(o) {
+  return (o.policy.tags || []).map(t => `<span class="pill ${o.policy.decision === "blocked" ? "bad" : "warn"}">${TAG_ICON[t.kind] || ""} ${esc(t.text)}</span>`).join("");
+}
+function orderCard(o) {
+  const [cls, label] = STATUS[o.status] || ["", o.status];
+  const waiting = o.status === "pending_approval", editing = editingOrder === o.order_id;
+  const lines = o.lines.map((l, k) => `<div class="ln">
+      <div class="thumb sm">${l.content_unit === "KG" ? "🧺" : "🥛"}</div>
+      <div class="grow">${editing ? `<input type="number" min="0" value="${l.quantity}" data-k="${k}" aria-label="Quantity">` : `<b>${l.quantity}</b>`} × ${esc(l.name)}
+        <div class="faint">${esc(l.unit)}${l.content ? ` · ${l.content} ${esc(l.content_unit)}` : ""} · ${l.stock_source === "supplier" ? "from the supplier" : "Valio stock"}${l.price_basis ? " · " + esc(l.price_basis) : ""}</div></div>
+      <div class="amt">${eur(l.line_total_eur)}</div></div>`).join("");
+  let foot = "";
+  if (waiting && editing) {
+    foot = `<div class="actions"><span class="muted">Change the amounts. The new total is priced live and still checked against your rules.</span>
+      <div class="row"><button onclick="editingOrder=null;draw()">Cancel</button><button class="primary" onclick="approveChanged('${o.order_id}')">Approve with changes</button></div></div>`;
+  } else if (waiting) {
+    foot = `<div class="muted" style="margin-top:6px">Why it needs you</div><div class="row" style="margin-top:4px">${tagsHtml(o)}</div>
+      <details class="why"><summary>Full reasons</summary><ul>${o.policy.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+        <div style="margin-top:6px"><b>Agent's reason:</b> ${esc(o.agent_reason)}</div></details>
+      <div class="actions">
+        <span style="font-size:13px;color:var(--warn)">${o.approve_by ? `🕒 Approve by ${esc(o.approve_by.replace("T", " "))} to keep the delivery date` : ""}</span>
+        <div class="row"><button class="small ghost" onclick="withdraw('${o.order_id}')">Withdraw</button>
+          <button onclick="decide('${o.order_id}', false)">Reject</button>
+          <button onclick="editingOrder='${o.order_id}';draw()">Change</button>
+          <button class="primary" onclick="decide('${o.order_id}', true)">Approve</button></div>
+      </div>`;
+  } else {
+    const by = o.status === "confirmed" && o.decided_by === "door (automatic)" ? "Ordered by the agent within your rules" :
+      o.decided_by ? `${o.status === "cancelled" ? "Withdrawn" : o.status === "rejected" && o.decided_by.startsWith("door") ? "Stopped by Valio's rules" : "Decided"} by ${esc(o.decided_by)}` : "";
+    foot = `<div class="faint" style="margin-top:6px">${by}${o.changed_by ? ` · amounts changed (was ${eur(o.original_total_eur)})` : ""}${o.decision_note ? ` · “${esc(o.decision_note)}”` : ""}
+      ${o.receipt ? ` · receipt <span class="hash">${esc(o.receipt.slice(0, 12))}…</span>` : ""}</div>
+      ${o.status === "rejected" && o.policy.decision === "blocked" ? `<div class="row" style="margin-top:4px">${tagsHtml(o)}</div>` : ""}
+      ${o.warning ? `<div class="faint" style="color:var(--warn)">${esc(o.warning)}</div>` : ""}`;
+  }
+  return `<div class="card order ${waiting ? "waiting" : ""}">
+    <div class="head"><div><b>${esc(o.order_id)} · ${eur(o.total_eur)}</b> <span class="faint">· delivery ${dateText(o.deliver_by)}</span></div>
+      <span class="pill ${cls}">${label}</span></div>
+    <div class="lines">${lines}</div>${foot}</div>`;
+}
+
+async function decide(id, approve) {
+  const note = approve ? "" : (prompt("Why are you rejecting it? (optional)") ?? null);
+  if (note === null) return;
+  try { await post(`/api/human/orders/${id}/decision`, { approve, approver: buyer().approver, note }); flash(approve ? `${id} approved.` : `${id} rejected.`, approve ? "ok" : "warn"); }
+  catch (e) { flash(e.message, "bad"); }
+  load();
+}
+async function approveChanged(id) {
+  const o = orders.find(x => x.order_id === id);
+  const changes = [...document.querySelectorAll(`input[data-k]`)].map(i => ({ product_id: o.lines[+i.dataset.k].product_id, quantity: Math.max(0, Number(i.value) || 0) }));
+  if (!changes.some(c => c.quantity > 0)) { flash("Keep at least one product, or reject the order.", "bad"); return; }
+  try { const r = await post(`/api/human/orders/${id}/decision`, { approve: true, approver: buyer().approver, note: "Approved with changed amounts", changes });
+        editingOrder = null; flash(`${id} approved with changes: ${eur(r.total_eur)}.`); }
+  catch (e) { flash(e.message, "bad"); }
+  load();
+}
+async function withdraw(id) {
+  try { await post(`/api/human/orders/${id}/cancel`, { by: buyer().approver }); flash(`${id} withdrawn.`, "warn"); } catch (e) { flash(e.message, "bad"); }
+  load();
+}
+
+// ------------------------------------------------------------------ history and settings
+async function drawHistory() {
+  const [audit, verify] = await Promise.all([api("/api/demo/audit"), api("/api/human/audit/verify")]);
+  const mine = audit.filter(a => a.actor.endsWith(buyerId()) || a.actor.startsWith("human:"));
+  $("view").innerHTML = `<div class="banner ${verify.ok ? "ok" : "bad"}" style="margin-bottom:10px">${verify.ok
+      ? `✓ History verified: ${verify.entries} entries, none changed afterwards.` : `✗ History was changed at entry #${verify.broken_at}.`}</div>
+    <div class="card">${mine.length ? mine.map(a => `<div class="log"><span class="faint">#${a.seq} ${esc(a.at.replace("T", " ").slice(5, 16))}</span>
+      <span class="who">${esc(a.actor)}</span> ${esc(a.summary)}${a.reason ? `<div class="faint">why: ${esc(a.reason)}</div>` : ""}</div>`).join("")
+      : `<div class="empty">Nothing has happened yet.</div>`}</div>`;
+}
+
+function drawSettings() {
+  const m = buyer();
+  $("view").innerHTML = `<div class="card"><div class="set">
+      <div><b>Always ask me</b><div class="muted">Every order waits for the ${esc(m.approver)}, even small ones.</div></div>
+      <label class="switch"><input type="checkbox" id="s_always" ${m.always_ask ? "checked" : ""}><span></span></label>
+      <div><b>Agent may order alone up to</b><div class="muted">Only used when "Always ask me" is off. Orders must also be normal amounts.</div></div>
+      <div class="row"><input type="number" id="s_auto" min="0" value="${m.auto_approve_limit_eur}"> €</div>
+      <div><b>Never above</b><div class="muted">Orders over this are blocked, even with approval.</div></div>
+      <div class="row"><input type="number" id="s_hard" min="1" value="${m.hard_limit_eur}"> €</div>
+      <div><b>Delivery within</b></div>
+      <div class="row"><input type="number" id="s_lead" min="1" value="${m.max_lead_time_days}"> days</div>
+    </div>
+    <div class="faint" style="margin-top:12px">Food only · substitutes always need approval · over ${m.unusual_order_factor}× your usual week needs approval
+      (${Object.values(m.usual_weekly || {}).map(u => `${u.quantity} ${u.unit} ${u.name}`).join(", ")})</div>
+    <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="primary" onclick="saveSettings()">Save</button></div></div>
+    <h2>Connected agents</h2>
+    <div class="card">${m.agents.map(a => `<div class="agent"><div><b>${esc(a.name)}</b>
+        <div class="faint">${a.paused ? "Paused: every request is refused" : "Active"}</div></div>
+      <button class="${a.paused ? "primary" : "danger"} small" onclick="togglePause('${a.id}', ${!a.paused})">${a.paused ? "Resume" : "Pause"}</button></div>`).join("")}
+      <div class="faint" style="margin-top:8px">Pausing one agent stops it at Valio's door at once. Your other agents keep working.</div></div>`;
+}
+async function saveSettings() {
+  try {
+    await post(`/api/human/mandates/${buyerId()}/settings`, { by: buyer().approver, always_ask: $("s_always").checked,
+      auto_approve_limit_eur: Number($("s_auto").value), hard_limit_eur: Number($("s_hard").value), max_lead_time_days: Number($("s_lead").value) });
+    flash("Settings saved."); await loadBuyers();
+  } catch (e) { flash(e.message, "bad"); }
+}
+async function togglePause(agentId, pause) {
+  try { await post(`/api/human/agents/${buyerId()}/${agentId}/${pause ? "pause" : "resume"}`, { by: buyer().approver }); await loadBuyers(); }
+  catch (e) { flash(e.message, "bad"); }
+}
+
+// ------------------------------------------------------------------ main
+function draw() {
+  const waiting = orders.filter(o => o.status === "pending_approval");
+  $("nWaiting").hidden = !waiting.length; $("nWaiting").textContent = waiting.length;
+  if (tab === "waiting") $("view").innerHTML = waiting.length ? waiting.map(orderCard).join("") : `<div class="empty">Nothing is waiting for you.</div>`;
+  if (tab === "done") { const done = orders.filter(o => o.status !== "pending_approval");
+    $("view").innerHTML = done.length ? done.map(orderCard).join("") : `<div class="empty">No finished orders yet.</div>`; }
+}
+async function load() {
+  if (busy) return;
+  busy = true;
+  try {
+    orders = await api(`/api/demo/orders?buyer_id=${buyerId()}`);
+    const b = buyer();
+    $("who").textContent = b ? `You approve as ${b.approver} for ${b.buyer}. In production this is a notification on your phone.` : "";
+    if (tab === "waiting" || tab === "done") { if (!editingOrder && !document.activeElement?.matches("input")) draw(); else $("nWaiting").textContent = orders.filter(o => o.status === "pending_approval").length; }
+    if (tab === "history") await drawHistory();
+  } catch (e) { flash(e.message, "bad"); }
+  busy = false;
+}
+async function loadBuyers() {
+  const sel = $("buyer").value || new URLSearchParams(location.search).get("buyer");
+  buyers = await api("/api/demo/buyers");
+  $("buyer").innerHTML = buyers.map(b => `<option value="${b.buyer_id}" ${b.buyer_id === sel ? "selected" : ""}>${esc(b.buyer)}</option>`).join("");
+  if (tab === "settings") drawSettings();
+}
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  tab = b.dataset.tab; editingOrder = null;
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  if (tab === "settings") drawSettings(); else { draw(); load(); }
+});
+$("buyer").onchange = () => { editingOrder = null; if (tab === "settings") drawSettings(); load(); history.replaceState(null, "", `/orders?buyer=${buyerId()}`); };
+loadBuyers().then(load); setInterval(() => { if (tab !== "settings") load(); }, 4000);
+</script>
+</body>
+</html>

@@ -52,11 +52,13 @@ NEED_SCHEMA = {
                 "additionalProperties": False,
             },
         },
-        "deliver_by": {"type": ["string", "null"], "description": "YYYY-MM-DD or null"},
+        "deliver_by": {"type": ["string", "null"], "description": "YYYY-MM-DD, or null if the request gives no date"},
+        "budget_eur": {"type": ["number", "null"],
+                       "description": "Maximum total in EUR the buyer mentioned (e.g. 'max 1,200 €'), or null if none"},
         "priorities": {"type": "array", "items": {"type": "string", "enum": PRIORITIES}},
         "language": {"type": "string", "enum": ["en", "fi", "sv", "other"]},
     },
-    "required": ["items", "deliver_by", "priorities", "language"],
+    "required": ["items", "deliver_by", "budget_eur", "priorities", "language"],
     "additionalProperties": False,
 }
 
@@ -68,7 +70,8 @@ SYSTEM = (
     "Default unit: L for liquids, KG for foods sold by weight, PCS otherwise. Do not invent requirements. "
     "substitutes are other product types for the same culinary purpose (not other brands or fat levels of the same "
     "product); dietary and allergen requirements still apply to them, so never suggest one that cannot meet them. "
-    "Set strict_allergens for allergies and for school, daycare or hospital kitchens."
+    "Set strict_allergens for allergies and for school, daycare or hospital kitchens. "
+    "Put a stated spending limit in budget_eur; leave deliver_by and budget_eur null when not stated."
 )
 
 
@@ -106,12 +109,24 @@ _STOP = {"i", "we", "need", "please", "buy", "order", "get", "of", "by", "the", 
          "gluten", "kitchen", "hotel", "school", "hospital", "with", "some", "about"}
 
 
+_BUDGET = re.compile(r"(?:max(?:imum)?|budget(?: of)?|under|up to|at most|enintään|maks(?:imissaan)?|alle)\s*"
+                     r"(\d[\d\s,.]*\d|\d)\s*(?:€|eur|euros?|euroa)?|(\d[\d\s,.]*\d|\d)\s*(?:€|eur\b|euros?\b|euroa\b)")
+
+
+def _number(text: str) -> float:
+    return float(re.sub(r"[\s,]", "", text))
+
+
 def parse_offline(request: str, today: date) -> dict:
     text = request.lower()
+    budget = None
+    if b := _BUDGET.search(text):
+        budget = _number(b.group(1) or b.group(2))
+        text = text[:b.start()] + " " + text[b.end():]       # so the budget is not read as the quantity
     qty_match = re.search(r"(\d[\d\s,.]*\d|\d)\s*([a-zäö]+)?", text)
     quantity, unit = 1.0, "PCS"
     if qty_match:
-        quantity = float(re.sub(r"[\s,]", "", qty_match.group(1)))
+        quantity = _number(qty_match.group(1))
         unit = _UNIT_WORDS.get((qty_match.group(2) or "").strip(), "PCS")
     deliver_by = None
     if m := re.search(r"\d{4}-\d{2}-\d{2}", text):
@@ -138,6 +153,7 @@ def parse_offline(request: str, today: date) -> dict:
                                                                 "koulu", "sairaala", "päiväkoti", "allergia")),
                    "preferred_labels": [], "substitutes": []}],
         "deliver_by": deliver_by,
+        "budget_eur": budget,
         "priorities": ["price"],
         "language": "fi" if re.search(r"[äö]|tarvitsen|litraa", text) else "en",
     }

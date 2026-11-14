@@ -101,11 +101,66 @@ def verify_audit() -> dict:
 
 # ---------------------------------------------------------------- buyers & mandates
 
-def buyer_by_key(agent_key: str) -> dict:
+def agent_by_key(agent_key: str) -> tuple[dict, dict]:
+    """(buyer, agent) for an agent key. Each key belongs to one agent acting for one buyer."""
     for b in store.buyers.values():
-        if b["agent_key"] == agent_key:
-            return b
+        for a in b.get("agents", []):
+            if a["key"] == agent_key:
+                return b, a
     raise WholesalerError("Unknown agent key.")
+
+
+def buyer_by_key(agent_key: str) -> dict:
+    return agent_by_key(agent_key)[0]
+
+
+def check_agent(buyer_id: str, agent_id: str) -> dict:
+    """A paused agent is refused everything; the buyer's other agents keep working."""
+    buyer = store.buyers[buyer_id]
+    agent = next((a for a in buyer.get("agents", []) if a["id"] == agent_id), None)
+    if not agent:
+        raise WholesalerError(f"Unknown agent {agent_id}.")
+    if agent["paused"]:
+        raise MandateError(f"{agent['name']} is paused by {buyer['approver']}. It may not act for {buyer['name']}.")
+    return agent
+
+
+def set_agent_paused(buyer_id: str, agent_id: str, paused: bool, by: str) -> dict:
+    buyer = store.buyers[buyer_id]
+    agent = next((a for a in buyer.get("agents", []) if a["id"] == agent_id), None)
+    if not agent:
+        raise WholesalerError(f"Unknown agent {agent_id}.")
+    agent["paused"] = paused
+    audit(f"human:{by}", "pause_agent" if paused else "resume_agent",
+          f"{agent['name']} {'PAUSED' if paused else 'resumed'} for {buyer['name']}")
+    return public_mandate(buyer)
+
+
+SETTINGS = {"always_ask": bool, "auto_approve_limit_eur": float, "hard_limit_eur": float, "max_lead_time_days": int}
+
+
+def update_settings(buyer_id: str, changes: dict, by: str) -> dict:
+    """The buyer edits its own mandate. Every change is logged."""
+    buyer = store.buyers[buyer_id]
+    m = buyer["mandate"]
+    new = dict(m)
+    for key, value in changes.items():
+        if key not in SETTINGS or value is None:
+            continue
+        try:
+            new[key] = SETTINGS[key](value)
+        except (TypeError, ValueError) as exc:
+            raise WholesalerError(f"{key} must be a number.") from exc
+    if new["auto_approve_limit_eur"] < 0 or new["hard_limit_eur"] <= 0 or new["max_lead_time_days"] < 1:
+        raise WholesalerError("Limits must be positive.")
+    if new["auto_approve_limit_eur"] > new["hard_limit_eur"]:
+        raise WholesalerError("The agent's own limit can't be above the hard limit.")
+    changed = {k: (m[k], new[k]) for k in SETTINGS if m.get(k) != new[k]}
+    m.update(new)
+    if changed:
+        audit(f"human:{by}", "change_settings", f"Mandate {m['id']} changed: " +
+              ", ".join(f"{k} {old} -> {val}" for k, (old, val) in changed.items()), data={"changes": changed})
+    return public_mandate(buyer)
 
 
 def check_mandate(buyer: dict) -> dict:
@@ -119,6 +174,7 @@ def check_mandate(buyer: dict) -> dict:
 
 def public_mandate(buyer: dict) -> dict:
     return {"buyer": buyer["name"], "approver": buyer["approver"], "usual_weekly": buyer.get("usual_weekly", {}),
+            "agents": [{k: a[k] for k in ("id", "name", "paused")} for a in buyer.get("agents", [])],
             **buyer["mandate"]}
 
 
@@ -188,12 +244,15 @@ def search_products(buyer_id: str, query: str = "", max_results: int = 10) -> li
     return results
 
 
-def smart_lookup(buyer_id: str, request: str) -> dict:
-    """One sentence in, ranked deliverable options out (see lookup.py)."""
+def smart_lookup(buyer_id: str, request: str, need: dict | None = None) -> dict:
+    """One sentence in (or a need the buyer edited), ranked deliverable plans out (see lookup.py)."""
     from .lookup import lookup
     buyer = store.buyers[buyer_id]
     check_mandate(buyer)
-    result = lookup(request, today=today(), catalog=store.get_catalog(), valio=store.valio)
+    try:
+        result = lookup(request, today=today(), catalog=store.get_catalog(), valio=store.valio, need=need)
+    except ValueError as exc:
+        raise WholesalerError(str(exc)) from exc
     first = result["results"][0] if result["results"] else None
     plan = first["plan"] if first else {}
     audit(f"agent:{buyer_id}", "smart_lookup",
@@ -234,9 +293,31 @@ def request_quote(buyer_id: str, items: list[dict], deliver_by: str | None = Non
     """Binding fixed-price quote from live Valio prices. items = [{product_id, quantity (sales units)}]."""
     buyer = store.buyers[buyer_id]
     check_mandate(buyer)
+    requested = (_parse_date(deliver_by) or today() + timedelta(days=2)).isoformat()
+    try:
+        lines = _price_lines(items, requested)
+    except WholesalerError as exc:
+        audit(f"agent:{buyer_id}", "request_quote", f"Quote refused: {exc}", data={"items": items})
+        raise
+    total = round(sum(l["line_total_eur"] for l in lines), 2)
+    quote = {
+        "quote_id": store.next_id("Q"), "buyer_id": buyer_id, "lines": lines, "total_eur": total,
+        "currency": "EUR (excl. VAT)", "deliver_by": requested,
+        "valid_until": (datetime.now() + timedelta(minutes=QUOTE_VALID_MINUTES)).isoformat(timespec="seconds"),
+        "pricing": "fixed Valio price for this customer and date, no negotiation",
+    }
+    quote["policy_preview"] = evaluate(buyer, quote, is_substitute=False)
+    store.quotes[quote["quote_id"]] = quote
+    audit(f"agent:{buyer_id}", "request_quote",
+          f"Quote {quote['quote_id']} for {total} EUR; door says: {quote['policy_preview']['decision']}",
+          data={"quote_id": quote["quote_id"]})
+    return quote
+
+
+def _price_lines(items: list[dict], requested: str) -> list[dict]:
+    """Live-checked, fixed-price lines. Raises WholesalerError listing every problem."""
     if not items:
         raise WholesalerError("A quote needs at least one item.")
-    requested = (_parse_date(deliver_by) or today() + timedelta(days=2)).isoformat()
     products = [_product(i["product_id"]) for i in items]
     avail, prices = _live([p["id"] for p in products], requested)
     lines, problems = [], []
@@ -273,23 +354,11 @@ def request_quote(buyer_id: str, items: list[dict], deliver_by: str | None = Non
             "available_date": line.get("availableDate"),
             "stock_source": "supplier" if supplier else "valio_stock",
             "cutoff_passed": bool(closing and now and closing < now), "order_cutoff": a.get("closingTime"),
+            "price_basis": "your customer price" if pr.get("netPriceFound") else "Valio catalog price",
         })
     if problems:
-        audit(f"agent:{buyer_id}", "request_quote", "Quote refused: " + " ".join(problems), data={"items": items})
         raise WholesalerError("Cannot quote: " + " ".join(problems))
-    total = round(sum(l["line_total_eur"] for l in lines), 2)
-    quote = {
-        "quote_id": store.next_id("Q"), "buyer_id": buyer_id, "lines": lines, "total_eur": total,
-        "currency": "EUR (excl. VAT)", "deliver_by": requested,
-        "valid_until": (datetime.now() + timedelta(minutes=QUOTE_VALID_MINUTES)).isoformat(timespec="seconds"),
-        "pricing": "fixed Valio price for this customer and date, no negotiation",
-    }
-    quote["policy_preview"] = evaluate(buyer, quote, is_substitute=False)
-    store.quotes[quote["quote_id"]] = quote
-    audit(f"agent:{buyer_id}", "request_quote",
-          f"Quote {quote['quote_id']} for {total} EUR; door says: {quote['policy_preview']['decision']}",
-          data={"quote_id": quote["quote_id"]})
-    return quote
+    return lines
 
 
 def _clean_risks(declared_risks) -> list[str]:
@@ -300,17 +369,20 @@ def _clean_risks(declared_risks) -> list[str]:
 def evaluate(buyer: dict, quote: dict, *, is_substitute: bool, declared_risks: list[str] | None = None) -> dict:
     """The door's decision: agent may order alone, needs a human, or is blocked. Plain rules, plain reasons."""
     m = buyer["mandate"]
-    block, approve = [], []
+    block, approve = [], []          # (kind, short tag, full reason)
     for line in quote["lines"]:
         if m.get("food_only") and (line.get("tax_rate") or 0) >= NON_FOOD_TAX_RATE:
-            block.append(f"{line['name']} is not food (VAT {line['tax_rate']} %): outside the mandate.")
+            block.append(("food", "Not food",
+                          f"{line['name']} is not food (VAT {line['tax_rate']} %): outside the mandate."))
         if line.get("available_date"):
             lead = (date.fromisoformat(line["available_date"]) - today()).days
             if lead > m["max_lead_time_days"]:
-                block.append(f"{line['product_id']} arrives in {lead} days; the mandate allows {m['max_lead_time_days']}.")
+                block.append(("delivery", f"Arrives in {lead} days",
+                              f"{line['product_id']} arrives in {lead} days; the mandate allows {m['max_lead_time_days']}."))
         if line.get("cutoff_passed"):
-            approve.append(f"{line['name']}: the supplier's order cutoff has passed, so delivery by "
-                           f"{quote['deliver_by']} is not guaranteed.")
+            approve.append(("delivery", "Delivery date at risk",
+                            f"{line['name']}: the supplier's order cutoff has passed, so delivery by "
+                            f"{quote['deliver_by']} is not guaranteed."))
     per_category = defaultdict(float)
     for line in quote["lines"]:
         if line.get("content"):
@@ -318,21 +390,56 @@ def evaluate(buyer: dict, quote: dict, *, is_substitute: bool, declared_risks: l
     for cat, amount in per_category.items():
         usual = buyer.get("usual_weekly", {}).get(cat)
         if usual and amount > m["unusual_order_factor"] * usual["quantity"]:
-            approve.append(f"Unusual order: {amount:g} {usual['unit']} of {usual['name']} is "
-                           f"{amount / usual['quantity']:.1f}x the usual weekly {usual['quantity']:g} {usual['unit']}.")
+            times = amount / usual["quantity"]
+            approve.append(("quantity", f"{times:.0f}× your usual week",
+                            f"Unusual order: {amount:g} {usual['unit']} of {usual['name']} is "
+                            f"{times:.1f}x the usual weekly {usual['quantity']:g} {usual['unit']}."))
     if quote["total_eur"] > m["hard_limit_eur"]:
-        block.append(f"Total {quote['total_eur']} EUR exceeds the mandate's hard limit {m['hard_limit_eur']} EUR.")
+        block.append(("money", f"Over the {m['hard_limit_eur']:,.0f} € hard limit",
+                      f"Total {quote['total_eur']} EUR exceeds the mandate's hard limit {m['hard_limit_eur']} EUR."))
     if quote["total_eur"] > m["auto_approve_limit_eur"]:
-        approve.append(f"Total {quote['total_eur']} EUR is above the agent's own limit {m['auto_approve_limit_eur']} EUR.")
+        approve.append(("money", f"Over {m['auto_approve_limit_eur']:,.0f} €",
+                        f"Total {quote['total_eur']} EUR is above the agent's own limit {m['auto_approve_limit_eur']} EUR."))
     if is_substitute and m["substitutes_need_approval"]:
-        approve.append("Contains a substitute product; substitutes need human sign-off.")
+        approve.append(("substitute", "Not exactly what was asked",
+                        "Contains a substitute product; substitutes need human sign-off."))
     # An agent can only ADD caution: anything it declares sends the order to a human, never past a block.
-    approve += [f"Agent declared: {r}" for r in _clean_risks(declared_risks)]
+    approve += [(_risk_kind(r), _RISK_TAGS[_risk_kind(r)], f"Agent declared: {r}") for r in _clean_risks(declared_risks)]
+    if m.get("always_ask") and not approve:
+        approve.append(("settings", "You confirm every order",
+                        "Your settings: a human confirms every order, even small ones."))
     if block:
-        return {"decision": "blocked", "reasons": block}
+        return {"decision": "blocked", "reasons": [r for _, _, r in block], "tags": _tags(block)}
     if approve:
-        return {"decision": "needs_human_approval", "approver": buyer["approver"], "reasons": approve}
-    return {"decision": "agent_may_order", "reasons": ["Within the mandate: under the spending limit, food only, normal quantities, delivery confirmed."]}
+        return {"decision": "needs_human_approval", "approver": buyer["approver"],
+                "reasons": [r for _, _, r in approve], "tags": _tags(approve)}
+    return {"decision": "agent_may_order", "tags": [],
+            "reasons": ["Within the mandate: under the spending limit, food only, normal quantities, delivery confirmed."]}
+
+
+_RISK_TAGS = {"delivery": "Delivery date at risk", "substitute": "Not exactly what was asked",
+              "quantity": "Not the full amount", "agent": "Agent flagged a risk"}
+
+
+def _risk_kind(text: str) -> str:
+    t = text.lower()
+    if any(w in t for w in ("cutoff", "supplier", "delivery")):
+        return "delivery"
+    if any(w in t for w in ("substitute", "close variant")):
+        return "substitute"
+    if any(w in t for w in ("only ", "covered")):
+        return "quantity"
+    return "agent"
+
+
+def _tags(checks: list[tuple]) -> list[dict]:
+    """One short tag per kind of concern, so the approver reads 2-3 words, not 6 sentences."""
+    seen, out = set(), []
+    for kind, short, _ in checks:
+        if kind not in seen:
+            seen.add(kind)
+            out.append({"kind": kind, "text": short})
+    return out
 
 
 def _approve_by(quote: dict) -> str | None:
@@ -390,17 +497,46 @@ def _receipt(order: dict) -> str:
 
 # ---------------------------------------------------------------- human side
 
+def orders_for(buyer_id: str) -> list[dict]:
+    return [o for o in reversed(store.orders.values()) if o["buyer_id"] == buyer_id]
+
+
 def pending_orders() -> list[dict]:
     return [o for o in store.orders.values() if o["status"] == "pending_approval"]
 
 
-def decide(order_id: str, approve: bool, approver: str, note: str = "") -> dict:
+def cancel_order(order_id: str, by: str) -> dict:
+    """The buyer withdraws an order that is still waiting for approval."""
+    with _lock:
+        order = store.orders.get(order_id)
+        if not order:
+            raise WholesalerError(f"No order {order_id}.")
+        if order["status"] != "pending_approval":
+            raise WholesalerError(f"Order {order_id} is already {order['status'].replace('_', ' ')}.")
+        order["status"], order["decided_by"] = "cancelled", by
+    audit(f"human:{by}", "cancel", f"Order {order_id} cancelled by {by}", data={"order_id": order_id})
+    return order
+
+
+def decide(order_id: str, approve: bool, approver: str, note: str = "", changes: list[dict] | None = None) -> dict:
+    """Approve or reject. changes = [{product_id, quantity}] approves a changed order: it is re-priced live,
+    and Valio's hard rules still apply (a human can accept a risk, never break a block)."""
     with _lock:
         order = store.orders.get(order_id)
         if not order:
             raise WholesalerError(f"No order {order_id}.")
         if order["status"] != "pending_approval":
             raise WholesalerError(f"Order {order_id} is already {order['status']}.")
+        if approve and changes is not None:
+            items = [c for c in changes if float(c.get("quantity") or 0) > 0]
+            lines = _price_lines(items, order["deliver_by"])
+            changed = {"lines": lines, "total_eur": round(sum(l["line_total_eur"] for l in lines), 2),
+                       "deliver_by": order["deliver_by"]}
+            verdict = evaluate(store.buyers[order["buyer_id"]], changed, is_substitute=False)
+            if verdict["decision"] == "blocked":
+                raise WholesalerError("This change can't be approved: " + " ".join(verdict["reasons"]))
+            order["original_total_eur"] = order["total_eur"]
+            order.update(lines=lines, total_eur=changed["total_eur"], changed_by=approver)
         if approve and order["approve_by"] and datetime.now() > datetime.fromisoformat(order["approve_by"]):
             order["warning"] = f"Approved after {order['approve_by']}; delivery by {order['deliver_by']} is no longer guaranteed."
         order["status"] = "confirmed" if approve else "rejected"
@@ -408,6 +544,8 @@ def decide(order_id: str, approve: bool, approver: str, note: str = "") -> dict:
         order["decision_note"] = note
         if approve:
             order["receipt"] = _receipt(order)
+    changed_text = (f" with changes ({order['original_total_eur']} -> {order['total_eur']} EUR)"
+                    if approve and changes is not None else "")
     audit(f"human:{approver}", "approve" if approve else "reject",
-          f"Order {order_id} {order['status']} by {approver}", reason=note, data={"order_id": order_id})
+          f"Order {order_id} {order['status']} by {approver}{changed_text}", reason=note, data={"order_id": order_id})
     return order

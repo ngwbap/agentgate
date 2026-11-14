@@ -1,4 +1,4 @@
-"""AgentGate HTTP server: agent API, human API, discovery file, demo endpoints and web UI."""
+﻿"""AgentGate HTTP server: agent API, human API, discovery file, demo endpoints and web UI."""
 from __future__ import annotations
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -26,9 +26,11 @@ async def _wholesaler_error(_, exc: core.WholesalerError):
 
 def current_buyer(x_agent_key: str = Header(..., description="Agent key bound to one buyer's mandate")) -> dict:
     try:
-        return core.buyer_by_key(x_agent_key)
+        buyer, agent_ = core.agent_by_key(x_agent_key)
     except core.WholesalerError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+    core.check_agent(buyer["id"], agent_["id"])          # a paused agent gets 403, the buyer's others keep working
+    return buyer
 
 
 # ---------------------------------------------------------------- discovery
@@ -52,7 +54,8 @@ def discovery():
         "rules": {
             "pricing": "fixed Valio price per customer and date, no negotiation",
             "decisions": ["agent_may_order", "needs_human_approval", "blocked"],
-            "human_approval_when": ["total above the mandate's auto-approve limit",
+            "human_approval_when": ["the buyer's 'always ask me' setting is on (the default)",
+                                    "total above the mandate's auto-approve limit",
                                     "quantity far above the buyer's usual weekly order",
                                     "supplier order cutoff passed (delivery not guaranteed)", "substitute products",
                                     "any risk the agent declares itself (declared_risks on place_order)"],
@@ -127,10 +130,24 @@ def api_get_order(order_id: str, buyer: dict = Depends(current_buyer)):
 # ---------------------------------------------------------------- human API
 # (In production these sit behind the buyer's own login; open here for the demo.)
 
+class Change(BaseModel):
+    product_id: str
+    quantity: float
+
+
 class Decision(BaseModel):
     approve: bool
     approver: str
     note: str = ""
+    changes: list[Change] | None = None    # approve with changed quantities (re-priced live)
+
+
+class Settings(BaseModel):
+    by: str
+    always_ask: bool | None = None
+    auto_approve_limit_eur: float | None = None
+    hard_limit_eur: float | None = None
+    max_lead_time_days: int | None = None
 
 
 class MandateChange(BaseModel):
@@ -150,7 +167,31 @@ def api_pending():
 
 @app.post("/api/human/orders/{order_id}/decision", tags=["human"])
 def api_decide(order_id: str, body: Decision):
-    return core.decide(order_id, body.approve, body.approver, body.note)
+    changes = [c.model_dump() for c in body.changes] if body.changes is not None else None
+    return core.decide(order_id, body.approve, body.approver, body.note, changes)
+
+
+@app.post("/api/human/orders/{order_id}/cancel", tags=["human"])
+def api_cancel(order_id: str, body: MandateChange):
+    return core.cancel_order(order_id, body.by)
+
+
+@app.post("/api/human/mandates/{buyer_id}/settings", tags=["human"])
+def api_settings(buyer_id: str, body: Settings):
+    _buyer_or_404(buyer_id)
+    return core.update_settings(buyer_id, body.model_dump(exclude={"by"}), body.by)
+
+
+@app.post("/api/human/agents/{buyer_id}/{agent_id}/pause", tags=["human"])
+def api_pause(buyer_id: str, agent_id: str, body: MandateChange):
+    _buyer_or_404(buyer_id)
+    return core.set_agent_paused(buyer_id, agent_id, True, body.by)
+
+
+@app.post("/api/human/agents/{buyer_id}/{agent_id}/resume", tags=["human"])
+def api_resume(buyer_id: str, agent_id: str, body: MandateChange):
+    _buyer_or_404(buyer_id)
+    return core.set_agent_paused(buyer_id, agent_id, False, body.by)
 
 
 @app.post("/api/human/mandates/{buyer_id}/revoke", tags=["human"])
@@ -175,6 +216,28 @@ def api_verify():
 class ChatRequest(BaseModel):
     buyer_id: str
     message: str
+    need: dict | None = None        # the "Here's what I understood" fields, edited by the buyer
+
+
+class DraftLine(BaseModel):
+    product_id: str
+    units: float
+
+
+class DraftQuote(BaseModel):
+    buyer_id: str
+    lines: list[DraftLine]
+    deliver_by: str
+    is_substitute: bool = False
+    declared_risks: list[str] = []
+
+
+class DraftOrder(BaseModel):
+    buyer_id: str
+    quote_id: str
+    reason: str
+    is_substitute: bool = False
+    declared_risks: list[str] = []
 
 
 class PlanLine(BaseModel):
@@ -204,7 +267,20 @@ def api_buyers():
 @app.post("/api/demo/lookup", tags=["demo"])
 def api_demo_lookup(body: ChatRequest):
     _buyer_or_404(body.buyer_id)
-    return agent.lookup(body.buyer_id, body.message)
+    return agent.lookup(body.buyer_id, body.message, body.need)
+
+
+@app.post("/api/demo/quote", tags=["demo"])
+def api_demo_quote(body: DraftQuote):
+    _buyer_or_404(body.buyer_id)
+    return agent.quote(body.buyer_id, [l.model_dump() for l in body.lines], body.deliver_by, body.is_substitute,
+                       body.declared_risks)
+
+
+@app.post("/api/demo/order", tags=["demo"])
+def api_demo_order(body: DraftOrder):
+    _buyer_or_404(body.buyer_id)
+    return agent.order(body.buyer_id, body.quote_id, body.reason, body.is_substitute, body.declared_risks)
 
 
 @app.post("/api/demo/order-plan", tags=["demo"])
@@ -221,8 +297,8 @@ def api_rogue(body: BuyerRequest):
 
 
 @app.get("/api/demo/orders", tags=["demo"])
-def api_orders():
-    return list(reversed(core.store.orders.values()))
+def api_orders(buyer_id: str | None = None):
+    return core.orders_for(buyer_id) if buyer_id else list(reversed(core.store.orders.values()))
 
 
 @app.get("/api/demo/audit", tags=["demo"])
@@ -245,3 +321,13 @@ def api_reset():
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/orders", include_in_schema=False)
+def orders_page():
+    return FileResponse(WEB_DIR / "orders.html")
+
+
+@app.get("/shared.css", include_in_schema=False)
+def shared_css():
+    return FileResponse(WEB_DIR / "shared.css", media_type="text/css")

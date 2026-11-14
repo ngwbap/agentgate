@@ -18,9 +18,40 @@ def _safe(fn, *args, **kwargs):
         return {"error": str(exc)}
 
 
-def lookup(buyer_id: str, request: str) -> dict:
-    core.audit(f"user:{buyer_id}", "request", request)
-    return _safe(core.smart_lookup, buyer_id, request)
+ASSISTANT = "valio-assistant"   # Valio's own buying assistant (the web page) is one agent among others
+
+
+def lookup(buyer_id: str, request: str, need: dict | None = None) -> dict:
+    try:
+        core.check_agent(buyer_id, ASSISTANT)
+    except core.WholesalerError as exc:
+        return {"error": str(exc)}
+    core.audit(f"user:{buyer_id}", "request", request if not need else f"Search again with edited details: {request}")
+    return _safe(core.smart_lookup, buyer_id, request, need)
+
+
+def quote(buyer_id: str, lines: list[dict], deliver_by: str, is_substitute: bool = False,
+          declared_risks: list[str] | None = None) -> dict:
+    """Fixed-price quote for the draft order, with the door's verdict BEFORE anything is committed.
+    The preview uses what the agent will tell the door (substitute, declared risks), so it matches the real order."""
+    try:
+        core.check_agent(buyer_id, ASSISTANT)
+    except core.WholesalerError as exc:
+        return {"error": str(exc)}
+    q = _safe(core.request_quote, buyer_id,
+              [{"product_id": l["product_id"], "quantity": l["units"]} for l in lines if l["units"] > 0], deliver_by)
+    if not q.get("error"):
+        q["policy_preview"] = core.evaluate(core.store.buyers[buyer_id], q, is_substitute=is_substitute,
+                                            declared_risks=declared_risks)
+    return q
+
+
+def order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool, declared_risks: list[str]) -> dict:
+    try:
+        core.check_agent(buyer_id, ASSISTANT)
+    except core.WholesalerError as exc:
+        return {"error": str(exc)}
+    return _safe(core.place_order, buyer_id, quote_id, reason, is_substitute, declared_risks)
 
 
 def order_plan(buyer_id: str, lines: list[dict], deliver_by: str, reason: str, is_substitute: bool = False,

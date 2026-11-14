@@ -192,7 +192,20 @@ def build_option(p: dict, item: dict, deliver_by: str | None, avail: dict | None
         "may_contain_allergens": [ALLERGENS.get(a, a) for a in p["may_contain"]],
         "free_from_allergens": [ALLERGENS.get(a, a) for a in p["free_from"]],
         "flags": flags, "evidence": evidence, "tier": tier,
+        "tax_rate": ((price or {}).get("tax") or {}).get("taxRate"),
+        "available_units_text": _stock_text(status, available_amount, p["sales_unit"]),
     }
+
+
+def _stock_text(status: str, amount, sales_unit: str) -> str:
+    """Plain words for the product card."""
+    if status == "in_stock":
+        return "In Valio stock" if not amount or amount >= TERMINAL_UNKNOWN else f"{amount:g} {sales_unit} in Valio stock"
+    if status == "partial":
+        return f"Only {amount:g} {sales_unit} in Valio stock"
+    if status == "supplier":
+        return "From the supplier, quantity not guaranteed"
+    return {"blocked": "Can't be ordered now", "unavailable": "Out of stock"}.get(status, "Not checked")
 
 
 def _clip(x: float) -> float:
@@ -458,6 +471,44 @@ def build_plans(options: list[dict], item: dict) -> list[dict]:
     return chosen
 
 
+def apply_budget(plans: list[dict], budget: float | None) -> list[dict]:
+    """The buyer's own spending limit for this request: plans within it come first, the rest say so."""
+    for p in plans:
+        p["over_budget"] = bool(budget and p["total_eur"] > budget)
+        if p["over_budget"]:
+            p["trade_offs"].append(f"{p['total_eur']:,.2f} € is over your {budget:,.0f} € budget")
+    plans.sort(key=lambda p: (p["over_budget"], -p["score"], p["total_eur"]))
+    for label, p in zip(PLAN_LABELS, plans):
+        p["label"] = label
+    return plans
+
+
+def normalise_need(need: dict, today: date) -> dict:
+    """A need edited by the buyer in the UI: fill gaps and keep only known values."""
+    out = {"items": [], "deliver_by": need.get("deliver_by") or None, "budget_eur": need.get("budget_eur") or None,
+           "priorities": [p for p in need.get("priorities") or [] if p in und.PRIORITIES] or ["price"],
+           "language": need.get("language") or "en", "engine": "edited by the buyer", "usage": None}
+    if out["deliver_by"]:
+        date.fromisoformat(out["deliver_by"])                     # raises ValueError on a bad date
+    for it in need.get("items") or []:
+        label = str(it.get("label") or "").strip()
+        terms = [t.strip() for t in it.get("product_terms") or [] if str(t).strip()] or ([label] if label else [])
+        if not terms or float(it.get("quantity") or 0) <= 0:
+            continue
+        out["items"].append({
+            "label": label or terms[0], "product_terms": terms, "quantity": float(it["quantity"]),
+            "unit": it.get("unit") if it.get("unit") in und.UNITS else "PCS",
+            "must_claims": [c for c in it.get("must_claims") or [] if c in CLAIM_NAMES],
+            "exclude_allergens": [a for a in it.get("exclude_allergens") or [] if a in ALLERGENS],
+            "strict_allergens": bool(it.get("strict_allergens")),
+            "preferred_labels": [l for l in it.get("preferred_labels") or [] if l in LABEL_NAMES],
+            "substitutes": [s for s in it.get("substitutes") or [] if s.get("product_terms")][:2],
+        })
+    if not out["items"]:
+        raise ValueError("Say what you need and how much.")
+    return out
+
+
 def has_confirmed_exact(plans: list[dict]) -> bool:
     return any(p["confidence"] == "confirmed" and p["fidelity"] >= 0.999 for p in plans)
 
@@ -480,13 +531,21 @@ def _search(catalog, terms: list[str], item: dict, limit: int) -> dict:
                           content_unit=item["unit"] if item["unit"] in ("L", "KG") else None, limit=limit)
 
 
-def lookup(request: str, *, today: date | None = None, catalog=None, valio=None) -> dict:
+def lookup(request: str, *, today: date | None = None, catalog=None, valio=None, need: dict | None = None) -> dict:
+    """need: a structured need the buyer edited; when given, the AI understanding step is skipped."""
     today = today or date.today()
     catalog = catalog or get_catalog()
     valio = valio or default_valio
     calls_before = dict(valio.stats)
-    need = und.understand(request, today)
+    need = normalise_need(need, today) if need else und.understand(request, today)
     deliver_by = need.get("deliver_by") or (today + timedelta(days=2)).isoformat()
+    budget = need.get("budget_eur") or None
+    assumptions = []
+    if not need.get("deliver_by"):
+        assumptions.append({"field": "deliver_by",
+                            "text": f"No date given, so I assumed {date.fromisoformat(deliver_by).strftime('%a %d %b')}"})
+    if not budget:
+        assumptions.append({"field": "budget_eur", "text": "No budget set"})
     usage = [need["usage"]] if need.get("usage") else []
     priorities = need.get("priorities") or []
 
@@ -554,7 +613,7 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None)
 
     results = []
     for s in shortlists:
-        plans = s["plans"]
+        plans = apply_budget(s["plans"], budget)
         results.append({
             "item": s["item"], "options": s["options"], "badges": badges(s["options"]),
             "plans": plans, "plan": plans[0] if plans else dict(NO_PLAN),
@@ -567,6 +626,7 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None)
     calls = valio.stats["calls"] - calls_before.get("calls", 0)
     return {
         "request": request, "need": {k: v for k, v in need.items() if k not in ("usage",)}, "deliver_by": deliver_by,
+        "budget_eur": budget, "assumptions": assumptions,
         "results": results, "live_error": live_error,
         "plan_scoring": {"certainty_weight": W_CERTAINTY, "fidelity_weight": W_FIDELITY,
                          "certainty": {"Valio stock": CERT_VALIO_STOCK, "supplier stock": CERT_SUPPLIER,

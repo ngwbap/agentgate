@@ -218,16 +218,36 @@ def test_milk_plan_goes_to_the_manager_with_all_reasons_then_confirms():
     assert done["status"] == "confirmed" and done["receipt"]
 
 
-def test_small_normal_order_is_confirmed_by_the_door():
+def allow_small_orders(buyer="hotel-aurora"):
+    client.post(f"/api/human/mandates/{buyer}/settings", json={"by": "Kitchen manager", "always_ask": False})
+
+
+def test_by_default_a_human_confirms_every_order():
+    plan = run_lookup("24 litres of oat drink by Monday")["results"][0]["plan"]
+    order = agent.order_plan("hotel-aurora", plan["lines"], "2026-11-16", plan["why"])["order"]
+    assert order["status"] == "pending_approval"
+    assert order["policy"]["tags"] == [{"kind": "settings", "text": "You confirm every order"}]
+
+
+def test_small_normal_order_is_confirmed_by_the_door_when_the_buyer_allows_it():
+    allow_small_orders()
     res = run_lookup("24 litres of oat drink by Monday")["results"][0]
     plan = res["plan"]
     assert plan["confidence"] == "confirmed" and plan["label"] == "Best" and plan["approval_needed"] == []
     order = agent.order_plan("hotel-aurora", plan["lines"], "2026-11-16", plan["why"],
                              declared_risks=plan["approval_needed"])["order"]
     assert order["status"] == "confirmed" and order["decided_by"] == "door (automatic)"
+    assert "always_ask True -> False" in core.store.audit[0]["summary"]                  # the change is logged
+
+
+def test_settings_are_validated():
+    res = client.post("/api/human/mandates/hotel-aurora/settings",
+                      json={"by": "Kitchen manager", "auto_approve_limit_eur": 20000})
+    assert res.status_code == 400 and "above the hard limit" in res.json()["error"]
 
 
 def test_any_declared_risk_sends_a_small_order_to_a_human():
+    allow_small_orders()
     q = client.post("/api/v1/quotes", headers=AURORA, json={"items": [{"product_id": "900004", "quantity": 6}]}).json()
     assert q["policy_preview"]["decision"] == "agent_may_order"
     o = client.post("/api/v1/orders", headers=AURORA, json={"quote_id": q["quote_id"], "reason": "weekly oat drink",
@@ -244,6 +264,102 @@ def test_misbehaving_agent_is_stopped_every_time():
     assert results[1]["status"] == "rejected" and "not food" in " ".join(results[1]["policy"]["reasons"])
     assert "error" in results[2]
     assert all(o["status"] == "rejected" for o in core.store.orders.values())
+
+
+def test_approver_reasons_are_short_tags_without_repeats():
+    best = run_lookup(MILK)["results"][0]["plans"][0]
+    order = agent.order_plan("hotel-aurora", best["lines"], "2026-11-16", best["why"],
+                             declared_risks=best["approval_needed"])["order"]
+    kinds = [t["kind"] for t in order["policy"]["tags"]]
+    assert sorted(kinds) == ["delivery", "money", "quantity"]           # the declared cutoff risk is not repeated
+    assert {"kind": "quantity", "text": "8× your usual week"} in order["policy"]["tags"]
+
+
+def test_quote_preview_matches_what_the_order_will_say(monkeypatch):
+    with_substitute(monkeypatch, quantity=650)
+    best = run_lookup(MILK)["results"][0]["plans"][0]
+    lines = [{"product_id": l["product_id"], "units": l["units"]} for l in best["lines"]]
+    q = client.post("/api/demo/quote", json={"buyer_id": "hotel-aurora", "deliver_by": "2026-11-16", "lines": lines,
+                                             "is_substitute": True, "declared_risks": best["approval_needed"]}).json()
+    assert "substitute" in [t["kind"] for t in q["policy_preview"]["tags"]]
+    o = client.post("/api/demo/order", json={"buyer_id": "hotel-aurora", "quote_id": q["quote_id"], "reason": best["why"],
+                                             "is_substitute": True, "declared_risks": best["approval_needed"]}).json()
+    assert o["policy"]["tags"] == q["policy_preview"]["tags"]
+
+
+def test_approver_can_approve_with_changed_amounts():
+    best = run_lookup(MILK)["results"][0]["plans"][0]
+    order = agent.order_plan("hotel-aurora", best["lines"], "2026-11-16", best["why"])["order"]
+    done = client.post(f"/api/human/orders/{order['order_id']}/decision", json={
+        "approve": True, "approver": "Kitchen manager", "changes": [{"product_id": "900001", "quantity": 30}]}).json()
+    assert done["status"] == "confirmed" and done["total_eur"] == 390.0 and done["original_total_eur"] == 1400.0
+    assert len(done["lines"]) == 1 and done["changed_by"] == "Kitchen manager" and done["receipt"]
+    assert "with changes" in core.store.audit[-1]["summary"]
+
+
+def test_a_change_can_not_break_a_hard_rule():
+    best = run_lookup(MILK)["results"][0]["plans"][0]
+    order = agent.order_plan("hotel-aurora", best["lines"], "2026-11-16", best["why"])["order"]
+    res = client.post(f"/api/human/orders/{order['order_id']}/decision", json={
+        "approve": True, "approver": "Kitchen manager", "changes": [{"product_id": "900002", "quantity": 400}]})
+    assert res.status_code == 400 and "hard limit" in res.json()["error"]       # 12,400 EUR > 10,000 EUR
+    assert core.store.orders[order["order_id"]]["status"] == "pending_approval"
+
+
+def test_buyer_can_withdraw_a_waiting_order():
+    q = client.post("/api/v1/quotes", headers=AURORA, json={"items": [{"product_id": "900004", "quantity": 6}]}).json()
+    o = client.post("/api/v1/orders", headers=AURORA, json={"quote_id": q["quote_id"], "reason": "weekly oat drink"}).json()
+    done = client.post(f"/api/human/orders/{o['order_id']}/cancel", json={"by": "Kitchen manager"}).json()
+    assert done["status"] == "cancelled"
+    again = client.post(f"/api/human/orders/{o['order_id']}/decision", json={"approve": True, "approver": "x"})
+    assert again.status_code == 400
+
+
+def test_pausing_one_agent_leaves_the_others_working():
+    client.post("/api/human/agents/hotel-aurora/own-agent/pause", json={"by": "Kitchen manager"})
+    res = client.get("/api/v1/products?q=milk", headers=AURORA)
+    assert res.status_code == 403 and "paused" in res.json()["error"]
+    assert "error" not in agent.lookup("hotel-aurora", "24 litres of oat drink by Monday")     # Valio's assistant still works
+    client.post("/api/human/agents/hotel-aurora/valio-assistant/pause", json={"by": "Kitchen manager"})
+    assert "paused" in agent.lookup("hotel-aurora", "24 litres of oat drink by Monday")["error"]
+    client.post("/api/human/agents/hotel-aurora/own-agent/resume", json={"by": "Kitchen manager"})
+    assert client.get("/api/v1/products?q=milk", headers=AURORA).status_code == 200
+
+
+# ---------------------------------------------------------------- the request: budget, assumptions, edits
+
+def test_budget_is_understood_and_ranks_plans():
+    r = run_lookup("I need 1,000 litres of lactose-free milk by Monday, max 1,000 €")
+    assert r["budget_eur"] == 1000 and r["results"][0]["item"]["quantity"] == 1000   # the budget is not the amount
+    plans = r["results"][0]["plans"]
+    assert all(p["over_budget"] for p in plans)                                       # 1,400 and 1,550 EUR
+    assert any("over your 1,000 € budget" in t for t in plans[0]["trade_offs"])
+    assert {"field": "budget_eur", "text": "No budget set"} not in r["assumptions"]
+
+
+def test_missing_date_and_budget_are_reported_as_assumptions():
+    r = run_lookup("24 litres of oat drink")
+    fields = [a["field"] for a in r["assumptions"]]
+    assert fields == ["deliver_by", "budget_eur"] and r["deliver_by"] == "2026-11-16"
+
+
+def test_buyer_can_edit_the_understood_need_and_search_again():
+    r = run_lookup(MILK)
+    item = {**r["results"][0]["item"], "quantity": 500}
+    edited = core.smart_lookup("hotel-aurora", MILK, need={**r["need"], "items": [item], "budget_eur": 800})
+    assert edited["need"]["engine"] == "edited by the buyer"
+    best = edited["results"][0]["plans"][0]
+    assert best["kind"] == "split" or best["confidence"] == "confirmed"           # 500 L fits in Valio stock (600 L)
+    assert best["total_eur"] == 650.0 and not best["over_budget"]
+
+
+def test_an_edited_need_without_an_amount_is_refused():
+    r = run_lookup(MILK)
+    item = {**r["results"][0]["item"], "quantity": 0}
+    res = client.post("/api/v1/lookup", headers=AURORA, json={"request": MILK})
+    assert res.status_code == 200
+    with pytest.raises(core.WholesalerError):
+        core.smart_lookup("hotel-aurora", MILK, need={**r["need"], "items": [item]})
 
 
 def test_quote_refuses_more_than_valio_has_in_stock():
