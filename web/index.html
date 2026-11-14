@@ -281,10 +281,13 @@ function planStatus(p) {
 
 function plansHtml(r) {
   if (!r.plans.length) return `<h2>Ways to get it</h2><div class="banner warn">${esc(r.plan.why)}</div>`;
-  const ex = explain && r.plans[explain.j] && r.plans[explain.j].ratings[explain.k];
+  const ep = explain && r.plans[explain.j];
+  const ex = ep && (explain.k === "_top" ? { name: "Why it's highest rated", stars: ep.rating_stars, why: ep.highest_rated_why } : ep.ratings[explain.k]);
   return `<h2>${r.plans.length === 1 ? "The way to get it" : r.plans.length + " ways to get it"}</h2><div class="plans">${r.plans.map((p, j) => `
     <div class="card plan ${j === planIdx ? "sel" : ""}" role="button" tabindex="0" onclick="selectPlan(${j})" style="cursor:pointer">
       <div class="top"><span class="label">${esc(p.label)}</span><span class="price">${eur(p.total_eur)}</span></div>
+      ${p.highest_rated ? `<button class="pill ${explain && explain.j === j && explain.k === "_top" ? "accent" : "ok"}" style="margin-top:6px;font-size:12px;cursor:pointer"
+          onclick="event.stopPropagation(); toggleExplain(${j}, '_top')" title="Why?">★ Highest rated <span class="faint">ⓘ</span></button>` : ""}
       <div class="what">${planWhat(p)}</div>
       <div class="status">${planStatus(p)}</div>
       ${p.over_budget ? `<div class="faint" style="color:var(--bad);margin-top:4px">Over your budget</div>` : ""}
@@ -294,7 +297,7 @@ function plansHtml(r) {
             onclick="event.stopPropagation(); toggleExplain(${j}, '${k}')"><span>${esc(p.ratings[k].name)} <span class="faint">ⓘ</span></span>${starRow(p.ratings[k].stars)}</button>`).join("")}
       </div>` : ""}
     </div>`).join("")}</div>
-    ${ex ? `<div class="explain"><b>${esc(r.plans[explain.j].label)} · ${esc(ex.name)}: ${ex.stars.toFixed(1)}★</b>
+    ${ex ? `<div class="explain"><b>${esc(r.plans[explain.j].label)} · ${esc(ex.name)}${ex.stars != null ? ": " + ex.stars.toFixed(1) + "★" : ""}</b>
       <button class="ghost small" style="float:right" onclick="explain=null;render()" aria-label="Close">✕</button><div style="margin-top:4px">${esc(ex.why)}</div></div>` : ""}`;
 }
 

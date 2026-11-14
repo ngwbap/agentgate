@@ -557,6 +557,49 @@ def apply_budget(plans: list[dict], budget: float | None) -> list[dict]:
     return plans
 
 
+def mark_highest_rated(plans: list[dict]) -> list[dict]:
+    """Badge the plan with the most stars on the buyer's criteria, with the reason in plain words:
+    why it has more stars, and (if it isn't Best) why it is still ranked below Best."""
+    for p in plans:
+        p["highest_rated"], p["highest_rated_why"] = False, None
+    rated = [p for p in plans if p.get("ratings")]
+    if len(rated) < 2:
+        return plans
+    top_rating = max(p["rating"] for p in rated)
+    top = next(p for p in plans if p.get("ratings") and abs(p["rating"] - top_rating) < 1e-9)
+    best = plans[0]
+    crit = top["criteria"]
+
+    def stars_list(p):
+        return ", ".join(f"{p['ratings'][k]['name']} {p['ratings'][k]['stars']:.1f}★" for k in crit)
+
+    top["highest_rated"] = True
+    if top is best:
+        top["highest_rated_why"] = (f"{best['label']} is also the highest rated on what matters to you: "
+                                    f"{best['rating_stars']:.1f}★ overall ({stars_list(best)}). It is ranked first "
+                                    f"because it is the most certain way to get your order ({best['certainty']:.0%} "
+                                    f"certain, {best['confidence']}), and no other way has more stars.")
+        return plans
+    compare = "; ".join(f"{top['ratings'][k]['name']} {top['ratings'][k]['stars']:.1f}★ vs "
+                        f"{best['ratings'][k]['stars']:.1f}★" for k in crit)
+    lower = []
+    if top["certainty"] < best["certainty"] - 1e-9:
+        lower.append(f"its delivery is less certain ({top['confidence']}: {top['certainty']:.0%} certain, "
+                     f"against {best['certainty']:.0%} for {best['label']})")
+    if top["fidelity"] < best["fidelity"] - 1e-9:
+        lower.append(f"it is less close to what you asked ({top['fidelity']:.0%} match, against {best['fidelity']:.0%})")
+    if top.get("over_budget") and not best.get("over_budget"):
+        lower.append("it is over your budget")
+    risk = next((t for t in top["trade_offs"] if "supplier" in t or "cutoff" in t or "variant" in t or "substitute" in t), None)
+    top["highest_rated_why"] = (
+        f"{top['label']} has the most stars on what matters to you: {top['rating_stars']:.1f}★ against "
+        f"{best['rating_stars']:.1f}★ for {best['label']} ({compare}). "
+        f"It is ranked below {best['label']} because " + (" and ".join(lower) or "of a higher total price") + "."
+        + (f" In short: {risk}." if risk else "")
+        + f" Choose it if the stars matter more to you than that; it will go to the approver with these risks.")
+    return plans
+
+
 def normalise_need(need: dict, today: date) -> dict:
     """A need edited by the buyer in the UI: fill gaps and keep only known values."""
     out = {"items": [], "deliver_by": need.get("deliver_by") or None, "budget_eur": need.get("budget_eur") or None,
@@ -721,7 +764,7 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
 
     results = []
     for s in shortlists:
-        plans = apply_budget(s["plans"], budget)
+        plans = mark_highest_rated(apply_budget(s["plans"], budget))
         results.append({
             "item": s["item"], "options": s["options"], "badges": badges(s["options"]),
             "plans": plans, "plan": plans[0] if plans else dict(NO_PLAN),

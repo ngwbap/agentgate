@@ -377,6 +377,24 @@ def test_stars_explain_themselves_with_valio_data():
     assert "Weighted by how much each product covers" in best["ratings"]["price"]["why"]    # 900001 + 900002
 
 
+def test_highest_rated_badge_explains_itself():
+    plans = [{"label": "Best", "certainty": 1.0, "fidelity": 1.0, "confidence": "confirmed", "over_budget": False,
+              "rating": 0.75, "rating_stars": 4.0, "criteria": ["price"], "trade_offs": [],
+              "ratings": {"price": {"name": "Price", "stars": 4.0}}},
+             {"label": "Better", "certainty": 0.25, "fidelity": 1.0, "confidence": "not confirmed", "over_budget": False,
+              "rating": 1.0, "rating_stars": 5.0, "criteria": ["price"],
+              "trade_offs": ["1000 L from the supplier's warehouse: quantity not confirmed and the order cutoff has passed"],
+              "ratings": {"price": {"name": "Price", "stars": 5.0}}}]
+    lookup.mark_highest_rated(plans)
+    assert not plans[0]["highest_rated"] and plans[1]["highest_rated"]
+    why = plans[1]["highest_rated_why"]
+    assert "5.0★ against 4.0★ for Best" in why and "Price 5.0★ vs 4.0★" in why
+    assert "less certain (not confirmed: 25% certain, against 100% for Best)" in why and "cutoff has passed" in why
+    plans[0]["rating"] = 1.0                                              # Best is also the best rated
+    lookup.mark_highest_rated(plans)
+    assert plans[0]["highest_rated"] and "most certain way to get your order (100% certain, confirmed)" in plans[0]["highest_rated_why"]
+
+
 def test_unknown_reliability_is_said_out_loud():
     res = run_lookup(MILK)["results"][0]
     sour = next((o for o in res["options"] if o["reliability"] is None), None)
