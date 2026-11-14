@@ -12,6 +12,7 @@ from app import agent, core, lookup
 from app import understand as und
 from app.catalog import allergen_evidence, claim_proof
 from app.main import app
+from tests import fakes
 from tests.fakes import FakeValio, make_catalog
 
 client = TestClient(app)
@@ -174,6 +175,29 @@ def with_substitute(monkeypatch, quantity=None):
             need["items"][0]["quantity"] = quantity
         return need
     monkeypatch.setattr(und, "parse_offline", fake)
+
+
+def test_valio_substitution_list_is_used_but_never_breaks_a_requirement():
+    res = run_lookup(MILK)["results"][0]
+    by_id = {o["product_id"]: o for o in res["options"]}
+    assert "900013" in by_id and by_id["900013"]["valio_pick"]          # found only through Valio's list
+    assert by_id["900013"]["valio_substitute_for"] == ["900002"]
+    assert "900007" not in by_id                                          # Valio lists it, but it is not lactose-free
+    assert res["funnel"]["valio_substitutes_added"] == 1 and res["funnel"]["valio_substitutes_dropped"] == 1
+
+
+def test_valio_pick_beats_an_ai_guessed_variant(monkeypatch):
+    monkeypatch.setitem(fakes.LIVE, "900013", ("Stock", 100, 15.6, 1.30, "L", 13.5))   # 100 cases x 12 L in stock
+    res = run_lookup(MILK)["results"][0]
+    best = res["plans"][0]
+    # Best: all 600 L of the exact milk in stock, the rest from Valio's own pick, fully confirmed.
+    assert best["confidence"] == "confirmed" and [l["product_id"] for l in best["lines"]] == ["900001", "900013"]
+    assert best["fidelity"] == 0.96                                       # (600 x 1.0 + 400 x 0.9) / 1000
+    assert any("Valio's own recommended replacement" in t for t in best["trade_offs"])
+    assert best["is_substitute"]                                          # still needs a human, like any variant
+    valio_line = best["lines"][1]
+    assert lookup._line_fidelity(valio_line) == 0.9                       # close variant 0.8 + 0.1 for Valio's pick
+    assert lookup._line_fidelity({**valio_line, "valio_pick": False}) == 0.8   # the same variant guessed by the AI
 
 
 def test_substitutes_are_checked_live_only_when_needed(monkeypatch):

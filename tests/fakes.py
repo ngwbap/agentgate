@@ -5,7 +5,7 @@ from app.catalog import Catalog, build_product
 
 
 def _raw(pid, name_en, name_fi, category, sales_unit, per_sales, volume_l=None, net_g=None, claims=(), contains=(),
-         labels=(), base_unit="ST", may_contain=(), free_from=()):
+         labels=(), base_unit="ST", may_contain=(), free_from=(), substitutes=()):
     each = {"synkkaPackagingType": "BASE_UNIT_OR_EACH"}
     if volume_l:
         each["volume"] = {"unit": "LTR", "value": volume_l}
@@ -15,6 +15,7 @@ def _raw(pid, name_en, name_fi, category, sales_unit, per_sales, volume_l=None, 
         "id": pid, "salesUnitGtin": f"64{pid}", "salesUnit": sales_unit, "baseUnit": base_unit, "category": category,
         "allowedLotSize": 0.01, "deleted": False, "temperatureCondition": 4, "vendorName": "TEST VENDOR",
         "countryOfOrigin": "fi",
+        "substitutions": [{"product": pid, "substituteProduct": s} for s in substitutes],
         "units": [{"unitId": sales_unit, "sizeInBaseUnits": per_sales}, {"unitId": base_unit, "sizeInBaseUnits": 1}],
         "synkkaData": {
             "names": [{"value": name_en, "language": "en"}, {"value": name_fi, "language": "fi"}],
@@ -35,7 +36,10 @@ RAW = [
     _raw("900001", "Lactose-free milk drink 1 l", "Laktoositon maitojuoma 1 l", "10400", "KI", 10, volume_l=1,
          claims=["FREE_FROM_LACTOSE"], contains=["AM"], labels=["GOODS_FROM_FINLAND_BLUE_SWAN"]),
     _raw("900002", "Semi skimmed milk drink 10 l novobox lactose free", "Kevytmaitojuoma 10 l laktoositon", "10400",
-         "KI", 2, volume_l=10, claims=["FREE_FROM_LACTOSE"], contains=["AM"]),
+         "KI", 2, volume_l=10, claims=["FREE_FROM_LACTOSE"], contains=["AM"],
+         substitutes=["900013", "900007"]),             # Valio's list: one fits, whole milk is not lactose-free
+    _raw("900013", "Eila drink UHT 1 l lactose free", "Eila juoma UHT 1 l laktoositon", "10400", "KI", 12,
+         volume_l=1, claims=["FREE_FROM_LACTOSE"], contains=["AM"]),   # the name search for milk can't find it
     _raw("900006", "Skimmed sour milk 1 l lactose free", "Rasvaton piimä 1 l laktoositon", "10400", "ST", 1,
          volume_l=1, claims=["FREE_FROM_LACTOSE"], contains=["AM"]),
     _raw("900007", "Whole milk 1 l", "Täysmaito 1 l", "10400", "ST", 1, volume_l=1, contains=["AM"]),
@@ -70,6 +74,7 @@ LIVE = {
     "900005": ("Stock", 50, 9.5, 12.67, "L", 25.5),
     "900011": ("Stock", 50, 4.0, 4.0, "L", 13.5),
     "900003": ("Stock", 100, 1.5, 15.0, "KG", 13.5),
+    "900013": ("Stock", 0, 15.6, 1.30, "L", 13.5),       # Valio's listed substitute: out of stock unless a test says so
 }
 NOW = "2026-11-14T00:53:08+0200"
 

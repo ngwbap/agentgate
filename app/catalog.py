@@ -132,6 +132,9 @@ def build_product(p: dict, reliability: dict, co2: dict) -> dict:
         "temperature": p.get("temperatureCondition"),
         "data_updated": sd.get("lastUpdated"),
         "gtin": p.get("salesUnitGtin") or sd.get("gtin"),
+        # Valio's own rule list: products that can replace this one when it is not available.
+        "valio_substitutes": [s["substituteProduct"] for s in p.get("substitutions") or []
+                              if s.get("product") == p["id"] and s.get("substituteProduct") not in (None, p["id"])],
         "reliability": reliability.get(p["id"]),
         "co2_per_kg": co2.get(p["id"]),
         "_tokens": {t.lower() for t in _TOKEN.findall(f"{name_en} {name_fi} {name_sv} {sd.get('brand') or ''}")},
@@ -158,6 +161,18 @@ class Catalog:
 
     def __len__(self) -> int:
         return len(self.products)
+
+    @staticmethod
+    def meets(p: dict, *, must_claims=(), exclude_allergens=(), strict_allergens=False, content_unit=None) -> bool:
+        """The same hard rules as search(), for a single product (e.g. one Valio lists as a substitute)."""
+        if any(not claim_proof(p, c) for c in must_claims):
+            return False
+        for code in exclude_allergens:
+            if code in p["contains"] or (strict_allergens and code in p["may_contain"]):
+                return False
+        if strict_allergens and exclude_allergens and not has_allergen_data(p):
+            return False
+        return not (content_unit in ("L", "KG") and p["content_unit"] != content_unit)
 
     # ------------------------------------------------------------ search
 

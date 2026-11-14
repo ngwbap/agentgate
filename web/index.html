@@ -196,7 +196,8 @@ function planWhat(p) {
 function shortName(n) { return n.length > 38 ? n.slice(0, 36) + "…" : n; }
 function planStatus(p) {
   const exact = p.lines.every(l => l.match === "exact");
-  if (p.confidence === "confirmed") return `<span class="dot ok"></span>In Valio stock${exact ? "" : ` · <span class="muted">${p.is_substitute && p.lines.some(l => l.match === "substitute") ? "substitute" : "close variant"}</span>`}`;
+  const valio = p.lines.some(l => l.valio_pick && l.match !== "exact") ? " · ★ Valio's pick" : "";
+  if (p.confidence === "confirmed") return `<span class="dot ok"></span>In Valio stock${exact ? "" : ` · <span class="muted">${p.is_substitute && p.lines.some(l => l.match === "substitute") ? "substitute" : "close variant"}${valio}</span>`}`;
   if (p.confidence === "partly confirmed") return `<span class="dot warn"></span>Partly guaranteed`;
   return `<span class="dot warn"></span>Not guaranteed`;
 }
@@ -216,8 +217,13 @@ function alternatives(line) {
   const o = opt(line.product_id), inDraft = new Set(draft.map(d => d.product_id));
   return res().options.filter(x => !inDraft.has(x.product_id) && x.on_time && x.unit_price_eur && x.content_per_sales_unit &&
       ["in_stock", "partial", "supplier"].includes(x.status) && x.match !== "different")
-    .sort((a, b) => (a.status === "supplier") - (b.status === "supplier") || (a.comparison_price_eur || 1e9) - (b.comparison_price_eur || 1e9))
+    .sort((a, b) => valioFor(b, line) - valioFor(a, line) || (a.status === "supplier") - (b.status === "supplier") ||
+                    (a.comparison_price_eur || 1e9) - (b.comparison_price_eur || 1e9))
     .slice(0, 3);
+}
+function valioFor(o, line) { return (o.valio_substitute_for || []).includes(line.product_id) ? 1 : 0; }
+function valioNote(o) {
+  return o.valio_pick && o.match !== "exact" ? `<span class="pill ok" style="font-size:12px;padding:1px 8px">★ Valio's pick</span>` : "";
 }
 
 function draftHtml(r) {
@@ -235,9 +241,9 @@ function draftHtml(r) {
         <div class="faint">${esc(o.product_id)}${o.brand ? " · " + esc(o.brand) : ""}${o.origin ? " · " + esc(o.origin) : ""}${o.labels && o.labels.length ? " · " + esc(o.labels[0]) : ""}</div>
         <div class="row" style="gap:6px;font-size:13px;margin-top:2px">${stock(o)}</div>
         <div style="font-size:14px;margin-top:2px"><b>${eur(o.comparison_price_eur || o.unit_price_eur)}</b> / ${esc(o.comparison_price_eur ? unit : o.sales_unit)}<span class="faint">${vat}</span></div>
-        ${d.match !== "exact" ? `<div class="faint" style="color:var(--warn)">${d.match === "close" ? "Close variant" : "Substitute"}: ${esc(o.match_reason)}</div>` : ""}
+        ${d.match !== "exact" ? `<div class="row" style="gap:6px;margin-top:2px">${valioNote(o)}<span class="faint" style="color:var(--warn)">${d.match === "close" ? "Close variant" : "Substitute"}: ${esc(o.match_reason)}</span></div>` : ""}
         ${alts.length ? `<div class="alts"><span class="faint">Swap for</span>${alts.map(a => `<button onclick="swap(${k}, '${a.product_id}')" title="${esc(a.name)} (${esc(a.available_units_text)})">
-          <span class="dot ${a.status === "supplier" || a.status === "partial" ? "warn" : "ok"}"></span>${esc(a.brand || shortName(a.name))} ${num(a.content_per_sales_unit)} ${esc(unit)} pack${a.match !== "exact" ? " (" + esc(a.match === "close" ? "variant" : "substitute") + ")" : ""} · ${eur(a.comparison_price_eur)}/${esc(unit)}</button>`).join("")}</div>` : ""}
+          <span class="dot ${a.status === "supplier" || a.status === "partial" ? "warn" : "ok"}"></span>${valioFor(a, d) ? "★ Valio's pick: " : ""}${esc(a.brand || shortName(a.name))} ${num(a.content_per_sales_unit)} ${esc(unit)} pack${a.match !== "exact" ? " (" + esc(a.match === "close" ? "variant" : "substitute") + ")" : ""} · ${eur(a.comparison_price_eur)}/${esc(unit)}</button>`).join("")}</div>` : ""}
         <details class="why"><summary>Where this comes from</summary><ul>${Object.entries(o.evidence || {}).map(([k2, v]) => `<li><b>${esc(k2.replace("_", " "))}:</b> ${esc(v)}</li>`).join("")}
           ${o.contains_allergens && o.contains_allergens.length ? `<li><b>contains:</b> ${esc(o.contains_allergens.join(", "))}</li>` : ""}
           ${o.may_contain_allergens && o.may_contain_allergens.length ? `<li><b>may contain:</b> ${esc(o.may_contain_allergens.join(", "))}</li>` : ""}</ul></details>
@@ -343,7 +349,8 @@ function demoStats() {
   $("demoOut").innerHTML = `<div class="funnel">${[`${f.catalog.toLocaleString("en")} products`, ...f.steps.map(s => `${s.remaining} ${esc(s.step)}`),
     `${f.judged} judged by AI`, `${f.checked_live} checked live`].map(s => `<span>${s}</span>`).join(" → ")}</div>
     <div>Understood by ${esc(last.need.engine)} · ${last.ai_usage.calls} AI call(s), $${last.ai_usage.usd} · ${last.api.calls} Valio API call(s) for ${last.api.products_checked} products
-    ${f.substitutes_note ? "<br>" + esc(f.substitutes_note) : ""}</div>
+    ${f.substitutes_note ? "<br>" + esc(f.substitutes_note) : ""}
+    <br>Valio's own substitution list: ${f.valio_substitutes_added} added${f.valio_substitutes_dropped ? `, ${f.valio_substitutes_dropped} left out (don't meet your requirements)` : ""}</div>
     <div>Plan scores: ${r.plans.map(p => `${esc(p.label)} ${p.score} (certainty ${p.certainty}, match ${p.fidelity})`).join(" · ")}</div>`;
 }
 

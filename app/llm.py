@@ -36,15 +36,21 @@ def _get_client():
     if _client is None:
         if not available():
             raise LLMUnavailable("ANTHROPIC_API_KEY is not set")
-        import anthropic
-        _client = anthropic.Anthropic(timeout=60.0, max_retries=2)
+        try:
+            import anthropic
+            _client = anthropic.Anthropic(timeout=60.0, max_retries=2)
+        except Exception as exc:
+            raise LLMUnavailable(f"Claude library can't load: {exc}") from exc
     return _client
 
 
 def ask_json(system: str, user: str, schema: dict, *, model: str | None = None,
              effort: str | None = None, max_tokens: int = 8000) -> tuple[dict, dict]:
     """Ask Claude for JSON matching `schema`. Returns (data, usage_info). Raises LLMUnavailable on any failure."""
-    import anthropic
+    try:
+        import anthropic
+    except Exception as exc:          # e.g. a Windows security policy blocking one of the library's compiled files
+        raise LLMUnavailable(f"Claude library can't load: {exc}") from exc
     model = model or config.CLAUDE_MODEL
     effort = effort or config.CLAUDE_EFFORT
     client = _get_client()

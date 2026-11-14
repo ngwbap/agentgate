@@ -28,6 +28,8 @@ SUBSTITUTE_PER_IDEA = 4    # candidates per substitute idea sent to the same rel
 LIVE_EXACT = 10            # exact matches checked live
 LIVE_CLOSE = 3             # close variants checked live
 LIVE_SUBSTITUTE = 4        # substitutes checked live, and only when needed
+VALIO_SUBS_MAX = 6         # extra products added because Valio itself lists them as substitutes
+VALIO_PICK_BONUS = 0.1     # a variant or substitute Valio recommends is a better match than one the AI guessed
 TERMINAL_UNKNOWN = 999999  # Valio's marker for "supplier stock, quantity unknown"
 BASE_WEIGHTS = {"price": 0.5, "reliability": 0.3, "co2": 0.2}
 
@@ -234,6 +236,8 @@ def rank(options: list[dict], priorities: list[str], preferred_labels: list[str]
         co2_s = cmin / o["co2_kg"] if (o["co2_kg"] and cmin) else 0.5
         label_bonus = 0.05 * len(wanted & set(o["labels"]))
         match_penalty = {"exact": 0.0, "close": 0.15}.get(o["match"], 0.3)
+        if o.get("valio_pick") and o["match"] != "exact":
+            match_penalty -= 0.05
         # Small penalty for buying more than needed because of whole cases (10 L asked, 12 L case).
         over = 0.0
         if quantity and o["units_needed"] and o["content_per_sales_unit"] and o["content_unit"] != "PCS":
@@ -291,7 +295,7 @@ def _line(o: dict, units: float, item: dict) -> dict:
     return {"product_id": o["product_id"], "name": o["name"], "units": units, "sales_unit": o["sales_unit"],
             "content": round(units * _size(o, item), 2), "unit_price_eur": o["unit_price_eur"],
             "total_eur": round(units * o["unit_price_eur"], 2) if o["unit_price_eur"] else None,
-            "match": o["match"], "match_reason": o["match_reason"],
+            "match": o["match"], "match_reason": o["match_reason"], "valio_pick": bool(o.get("valio_pick")),
             "source": "supplier" if o["status"] == "supplier" else "Valio stock",
             "cutoff_passed": o["cutoff_passed"], "certainty": _line_certainty(o)}
 
@@ -311,6 +315,11 @@ def _fill(sources: list[dict], item: dict) -> tuple[list[dict], float]:
     return lines, max(remaining, 0.0)
 
 
+def _line_fidelity(l: dict) -> float:
+    base = FIDELITY.get(l["match"], 0.5)
+    return min(1.0, base + VALIO_PICK_BONUS) if l.get("valio_pick") and l["match"] != "exact" else base
+
+
 def _make_plan(kind: str, lines: list[dict], item: dict) -> dict:
     qty, unit = float(item["quantity"]), item["unit"]
     covered = round(sum(l["content"] for l in lines), 2)
@@ -320,7 +329,7 @@ def _make_plan(kind: str, lines: list[dict], item: dict) -> dict:
         counted = min(l["content"], left)
         left -= counted
         cert_sum += counted * l["certainty"]
-        fid_sum += counted * FIDELITY.get(l["match"], 0.5)
+        fid_sum += counted * _line_fidelity(l)
         counted_sum += counted
     certainty = min(1.0, cert_sum / qty) if qty else 0.0          # uncovered quantity counts as 0
     fidelity = fid_sum / counted_sum if counted_sum else 0.0
@@ -336,6 +345,8 @@ def _make_plan(kind: str, lines: list[dict], item: dict) -> dict:
     trade_offs, approval = [], []
     for l in lines:
         share = f"{l['content']:g} {unit}"
+        if l["match"] != "exact" and l.get("valio_pick"):
+            trade_offs.append(f"{l['name']} is Valio's own recommended replacement")
         if l["match"] == "close":
             trade_offs.append(f"{l['name']} is a close variant, not exactly what was asked ({l['match_reason'] or 'variant'})")
             approval.append(f"{l['name']} is a close variant of {item['label']}: {l['match_reason'] or 'not exactly what was asked'}")
@@ -515,6 +526,13 @@ def has_confirmed_exact(plans: list[dict]) -> bool:
 
 # ---------------------------------------------------------------- pipeline
 
+def _mark_valio(options: list[dict], valio_for: dict[str, list[str]]) -> None:
+    """Flag products that Valio itself lists as a replacement for one of the products found."""
+    for o in options:
+        o["valio_substitute_for"] = valio_for.get(o["product_id"], [])
+        o["valio_pick"] = bool(o["valio_substitute_for"])
+
+
 def _live(valio, ids: list[str], deliver_by: str) -> tuple[dict, dict, str | None]:
     if not ids:
         return {}, {}, None
@@ -554,6 +572,24 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
         qty = float(item["quantity"])
         found = _search(catalog, item["product_terms"], item, SHORTLIST_SEARCH)
         cands = _shortlist(found["candidates"], qty, SHORTLIST_JUDGE)
+        # Valio's own substitution rules for the products found: add the replacements Valio lists,
+        # but only those that meet the same hard rules (claims, allergens, unit). Judged in the same AI call.
+        valio_for: dict[str, list[str]] = {}
+        for c in found["candidates"]:
+            for sid in c.get("valio_substitutes") or []:
+                valio_for.setdefault(sid, []).append(c["id"])
+        in_list, valio_added, valio_dropped = {c["id"] for c in cands}, [], 0
+        for sid in valio_for:
+            p = catalog.products.get(sid)
+            if not p or sid in in_list:
+                continue
+            if catalog.meets(p, must_claims=item["must_claims"], exclude_allergens=item["exclude_allergens"],
+                             strict_allergens=item["strict_allergens"],
+                             content_unit=item["unit"] if item["unit"] in ("L", "KG") else None):
+                valio_added.append(p)
+            else:
+                valio_dropped += 1
+        cands += valio_added[:VALIO_SUBS_MAX]
         taken = {c["id"] for c in cands}
         sub_cands, ideas = [], []
         for idea in (item.get("substitutes") or [])[:2]:
@@ -568,7 +604,8 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
         everything = cands + [s["product"] for s in sub_cands]
         match_of = lambda c: relevance.get(c["id"], {}).get("match")
         shortlists.append({
-            "item": item, "found": found, "relevance": relevance, "ideas": ideas,
+            "item": item, "found": found, "relevance": relevance, "ideas": ideas, "valio_for": valio_for,
+            "valio_added": len(valio_added[:VALIO_SUBS_MAX]), "valio_dropped": valio_dropped,
             "live": [c for c in everything if match_of(c) == "exact"][:LIVE_EXACT]
                     + [c for c in everything if match_of(c) == "close"][:LIVE_CLOSE],
             "substitutes": [c for c in everything if match_of(c) == "substitute"][:LIVE_SUBSTITUTE],
@@ -583,6 +620,7 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
         item = s["item"]
         s["options"] = [build_option(p, item, deliver_by, avail.get(p["id"]), prices.get(p["id"]),
                                      s["relevance"].get(p["id"], {})) for p in s["live"]]
+        _mark_valio(s["options"], s["valio_for"])
         rank(s["options"], priorities, item["preferred_labels"], float(item["quantity"]))
         s["plans"] = build_plans(s["options"], item)
         s["sub_note"], s["sub_checked"] = None, 0
@@ -604,6 +642,7 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
                 continue
             s["options"] += [build_option(p, item, deliver_by, avail2.get(p["id"]), prices2.get(p["id"]),
                                           s["relevance"].get(p["id"], {})) for p in s["substitutes"]]
+            _mark_valio(s["options"], s["valio_for"])
             rank(s["options"], priorities, item["preferred_labels"], float(item["quantity"]))
             s["plans"] = build_plans(s["options"], item)
             s["sub_checked"] = len(s["substitutes"])
@@ -619,6 +658,7 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
             "plans": plans, "plan": plans[0] if plans else dict(NO_PLAN),
             "funnel": {"catalog": s["found"]["catalog_size"], "steps": s["found"]["steps"],
                        "judged": len(s["relevance"]), "checked_live": len(s["live"]) + s["sub_checked"],
+                       "valio_substitutes_added": s["valio_added"], "valio_substitutes_dropped": s["valio_dropped"],
                        "substitute_ideas": s["ideas"], "substitutes_found": len(s["substitutes"]),
                        "substitutes_checked_live": s["sub_checked"], "substitutes_note": s["sub_note"]},
             "rejected": s["rejected"],
