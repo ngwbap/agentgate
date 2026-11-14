@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Valio Aimo orders</title>
-<link rel="stylesheet" href="/shared.css?v=4">
+<link rel="stylesheet" href="/shared.css?v=3">
 <style>
   /* Each order is a docket waiting to be signed: amber edge while it waits for a person. */
   .order { margin-bottom: 14px; padding: 16px 18px; border-left: 5px solid var(--line-strong); border-radius: 0 10px 10px 0; }
   .order.waiting { border-left-color: var(--warn-dot); }
   .order .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .order .head b { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .order .head b { font-size: 20px; font-weight: 800; font-variation-settings: "wdth" 112; font-variant-numeric: tabular-nums; }
   .order .lines { margin: 12px 0; border-top: 1px dashed var(--line-strong); border-bottom: 1px dashed var(--line-strong); }
   .order .ln { display: flex; gap: 12px; align-items: center; font-size: 14.5px; padding: 8px 0; }
   .order .ln + .ln { border-top: 1px solid var(--line); }
@@ -62,8 +62,7 @@ function unitWord(code, n) {
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const dateText =(iso) => iso ? new Date(iso.slice(0, 10) + "T12:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "–";
 const STATUS = { pending_approval: ["warn", "Waiting for you"], confirmed: ["ok", "Confirmed"], rejected: ["bad", "Rejected"], cancelled: ["", "Withdrawn"] };
-const TAG_ICON = { money: "euro", quantity: "package", delivery: "truck", substitute: "repeat", agent: "bot", settings: "hand", food: "ban" };
-const icon = (name) => name ? `<span class="i i-${name}" aria-hidden="true"></span>` : "";
+const TAG_ICON = { money: "💶", quantity: "📦", delivery: "🚚", substitute: "🔁", agent: "🤖", settings: "✋", food: "⛔" };
 
 let tab = "waiting", buyers = [], orders = [], editingOrder = null, busy = false;
 const buyerId = () => $("buyer").value;
@@ -80,10 +79,10 @@ function flash(text, cls = "ok") { $("msg").innerHTML = `<div class="banner ${cl
 
 // ------------------------------------------------------------------ orders
 function tagsHtml(o) {
-  return (o.policy.tags || []).map(t => `<span class="pill ${o.policy.decision === "blocked" ? "bad" : "warn"}">${icon(TAG_ICON[t.kind])} ${esc(t.text)}</span>`).join("");
+  return (o.policy.tags || []).map(t => `<span class="pill ${o.policy.decision === "blocked" ? "bad" : "warn"}">${TAG_ICON[t.kind] || ""} ${esc(t.text)}</span>`).join("");
 }
 function notesHtml(o) {
-  return (o.notes || []).length ? `<div style="font-size:14px;margin:4px 0 2px">${icon("note")} <b>Buyer's wishes:</b> ${o.notes.map(esc).join(" · ")}</div>` : "";
+  return (o.notes || []).length ? `<div style="font-size:14px;margin:4px 0 2px">📝 <b>Buyer's wishes:</b> ${o.notes.map(esc).join(" · ")}</div>` : "";
 }
 function orderCard(o) {
   const [cls, label] = STATUS[o.status] || ["", o.status];
@@ -102,7 +101,7 @@ function orderCard(o) {
       <details class="why"><summary>Full reasons</summary><ul>${o.policy.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
         <div style="margin-top:6px"><b>Agent's reason:</b> ${esc(o.agent_reason)}</div></details>
       <div class="actions">
-        <span style="font-size:13px;color:var(--warn)">${o.approve_by ? `${icon("clock")} Approve by ${esc(o.approve_by.replace("T", " "))} to keep the delivery date` : ""}</span>
+        <span style="font-size:13px;color:var(--warn)">${o.approve_by ? `🕒 Approve by ${esc(o.approve_by.replace("T", " "))} to keep the delivery date` : ""}</span>
         <div class="row"><button class="small ghost" onclick="withdraw('${o.order_id}')">Withdraw</button>
           <button onclick="decide('${o.order_id}', false)">Reject</button>
           <button onclick="editingOrder='${o.order_id}';draw()">Change</button>
@@ -148,7 +147,7 @@ async function drawHistory() {
   const [audit, verify] = await Promise.all([api("/api/demo/audit"), api("/api/human/audit/verify")]);
   const mine = audit.filter(a => a.actor.endsWith(buyerId()) || a.actor.startsWith("human:"));
   $("view").innerHTML = `<div class="banner ${verify.ok ? "ok" : "bad"}" style="margin-bottom:10px">${verify.ok
-      ? `${icon("shield")} History verified: ${verify.entries} entries, none changed afterwards.` : `${icon("alert")} History was changed at entry #${verify.broken_at}.`}</div>
+      ? `✓ History verified: ${verify.entries} entries, none changed afterwards.` : `✗ History was changed at entry #${verify.broken_at}.`}</div>
     <div class="card">${mine.length ? mine.map(a => `<div class="log"><span class="faint">#${a.seq} ${esc(a.at.replace("T", " ").slice(5, 16))}</span>
       <span class="who">${esc(a.actor)}</span> ${esc(a.summary)}${a.reason ? `<div class="faint">why: ${esc(a.reason)}</div>` : ""}</div>`).join("")
       : `<div class="empty">Nothing has happened yet.</div>`}</div>`;
