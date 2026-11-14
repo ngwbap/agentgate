@@ -110,13 +110,13 @@
     <label class="q" for="msg">What does your kitchen need?</label>
     <textarea id="msg" placeholder="1,000 litres of lactose-free milk by Monday, max 1,200 €. Deliver to the back door."></textarea>
     <div class="foot">
-      <div class="hint">Write or say it in English or Finnish. I'll turn it into the boxes below, or fill them in yourself.</div>
+      <div class="hint">Write or say it in English or Finnish. Nothing changes until you press Confirm request, which puts it in the boxes below. Or fill the boxes in yourself.</div>
       <div class="row">
         <span id="voice" class="row" hidden>
           <select id="voiceLang" aria-label="Speech language" style="padding:7px 8px"><option value="en-GB">English</option><option value="fi-FI">Suomi</option></select>
           <button id="mic" aria-label="Speak your request">🎤 Speak</button>
         </span>
-        <button id="fill">Fill in from my request</button>
+        <button id="fill" class="primary">Confirm request</button>
       </div>
     </div>
   </div>
@@ -205,11 +205,12 @@ function renderCriteria() {
     <div class="fields">
       <label class="f"><span>Product <span class="req">*</span></span><input value="${esc(it.label)}" placeholder="lactose-free milk" onchange="setLabel(this.value)"></label>
       <label class="f">Amount<div class="row" style="flex-wrap:nowrap;gap:6px"><input type="number" min="0" step="any" class="grow" value="${it.quantity ?? ""}" placeholder="1 pack"
-          onchange="cur().quantity = this.value ? Number(this.value) : null"><select onchange="cur().unit = this.value">${["L", "KG", "PCS"].map(u =>
+          onchange="cur().quantity = this.value ? Number(this.value) : null"><select onchange="cur().unit = this.value; $('unitWarn').innerHTML = unitWarnHtml()">${["L", "KG", "PCS"].map(u =>
           `<option value="${u}" ${u === it.unit ? "selected" : ""}>${u === "PCS" ? "pieces" : u === "L" ? "litres" : "kg"}</option>`).join("")}</select></div></label>
       <label class="f">Deliver by<input type="date" value="${crit.deliver_by || ""}" onchange="crit.deliver_by = this.value || null"></label>
       <label class="f">Budget (€)<input type="number" min="0" step="any" value="${crit.budget_eur ?? ""}" placeholder="No limit" onchange="crit.budget_eur = this.value ? Number(this.value) : null"></label>
     </div>
+    <div id="unitWarn">${unitWarnHtml()}</div>
     <div class="groups">
       <div class="group"><div class="t">Must be</div>${claims.map(c => tick(it.must_claims.includes(c), CLAIMS[c] || c.toLowerCase().replace(/_/g, " "), `toggle('must_claims','${c}')`)).join("")}</div>
       <div class="group"><div class="t">Avoid</div>${allergens.map(a => tick(it.exclude_allergens.includes(a), cap(ALLERGENS[a] || a), `toggle('exclude_allergens','${a}')`)).join("")}
@@ -228,8 +229,25 @@ function renderCriteria() {
 }
 function setLabel(v) {
   const it = cur(); v = v.trim();
-  if (v.toLowerCase() !== (it.label || "").toLowerCase()) { it.product_terms = v.split(/,| or /).map(s => s.trim()).filter(Boolean); it.substitutes = []; }
+  const changed = v.toLowerCase() !== (it.label || "").toLowerCase();
+  if (changed) { it.product_terms = v.split(/,| or /).map(s => s.trim()).filter(Boolean); it.substitutes = []; }
   it.label = v; $("c_err").textContent = "";
+  if (changed) checkUnit();
+}
+// Right unit for the product: Valio sells milk by litres and meat by kg. Warn and offer a fix; never change it silently.
+function unitWarnHtml() {
+  const it = cur(), uu = it.usual_unit;
+  if (!uu || !uu.unit || it.unit === "PCS" || uu.unit === it.unit || uu.share < 0.6) return "";
+  const word = uu.unit === "L" ? "litres" : "kg";
+  return `<div class="banner warn" style="margin-top:10px;font-size:14px">${esc(cap(it.label || "This product"))} is sold by ${word} at Valio
+    (${Math.round(uu.share * 100)}% of the matching products), not by ${it.unit === "L" ? "litres" : "kg"}.
+    <button class="small" onclick="cur().unit = '${uu.unit}'; renderCriteria(); markStale()">Use ${word}</button></div>`;
+}
+async function checkUnit() {
+  const it = cur(), terms = it.product_terms.length ? it.product_terms : [it.label];
+  try { it.usual_unit = terms[0] ? await post("/api/demo/unit-check", { product_terms: terms }) : null; }
+  catch (e) { it.usual_unit = null; }
+  if (it === cur() && $("unitWarn")) $("unitWarn").innerHTML = unitWarnHtml();
 }
 function toggle(field, v) { const a = cur()[field], i = a.indexOf(v); i < 0 ? a.push(v) : a.splice(i, 1); renderCriteria(); }
 function togglePref(kind) {
@@ -267,7 +285,7 @@ function setBusy(on, text) {
 async function fill() {
   const text = $("msg").value.trim();
   if (!text) { $("status").innerHTML = `<div class="banner warn">Write your request first, or fill in the boxes yourself.</div>`; return false; }
-  setBusy(true, "Reading your request… about 10 seconds.");
+  setBusy(true, "Reading your request into the boxes…");
   try {
     const r = await post("/api/demo/understand", { buyer_id: buyerId(), message: text });
     if (r.error) throw new Error(r.error);
@@ -276,7 +294,7 @@ async function fill() {
              priorities: n.priorities && n.priorities.length ? n.priorities : ["price"], other_wishes: n.other_wishes || [], language: n.language || "en" };
     ci = 0;
     // The request box is cleared for the next request; what was asked stays visible here.
-    fillInfo = `Filled in from “${esc(text.replace(/[.!?\s]+$/, ""))}”. ` + (n.engine === "offline parser"
+    fillInfo = `Confirmed: “${esc(text.replace(/[.!?\s]+$/, ""))}”. ` + (n.engine === "offline parser"
       ? "The AI isn't available right now, so the simple built-in reader did this. Please check carefully."
       : "Check and change anything, then press Find.");
     $("msg").value = "";
@@ -287,7 +305,10 @@ async function fill() {
 
 // ------------------------------------------------------------------ lookup
 async function find() {
-  if (!crit.items.some(it => (it.label || "").trim()) && $("msg").value.trim()) { if (!(await fill())) return; }
+  // Find only uses the boxes. A request still in the box above must be confirmed first; nothing changes on its own.
+  if ($("msg").value.trim() && !crit.items.some(it => (it.label || "").trim())) {
+    $("c_err").textContent = "Press Confirm request first, so your request goes into the boxes."; return;
+  }
   const pending = $("c_wish") && $("c_wish").value.trim();
   if (pending) { crit.other_wishes.push(pending); renderCriteria(); }
   const items = crit.items.filter(it => (it.label || "").trim());
@@ -594,19 +615,20 @@ if (Speech) {
     const said = (finalText + " " + interim).trim();
     rec = null; listening = false; clearTimeout(silence); interim = ""; show();
     $("mic").classList.remove("on"); $("mic").textContent = "🎤 Speak";
-    if (said && !fatal) fill();
+    // Voice only types into the request box. The buyer reads it and presses Confirm request.
+    if (said && !fatal) $("status").innerHTML = `<div class="banner" style="background:var(--soft)">Got it. Check the text in the request box, then press Confirm request.</div>`;
     else if (!fatal && $("status").textContent.startsWith("Listening")) $("status").innerHTML = "";
   }
   $("mic").onclick = () => {
     if (listening) { stopListening(); return; }
     listening = true; fatal = false; before = $("msg").value.trim(); finalText = ""; interim = ""; startedAt = Date.now();
     $("mic").classList.add("on"); $("mic").textContent = "■ Stop";
-    $("status").innerHTML = `<div class="banner" style="background:var(--soft)"><div class="spinner"></div>Listening… say what, how much and by when. Pause for 4 seconds or press Stop when you're done.</div>`;
+    $("status").innerHTML = `<div class="banner" style="background:var(--soft)"><div class="spinner"></div>Listening… say what, how much and by when. Pause for 4 seconds or press Stop when you're done. Then check the text and press Confirm request.</div>`;
     try { startSession(); } catch (err) { fatal = true; finish(); }
     setTimeout(() => { if (listening && !(finalText + interim).trim()) stopListening(); }, 10000);   // nothing said at all
   };
 }
-$("msg").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); fill(); } });
+$("msg").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); fill(); } });   // Enter = new line; Ctrl+Enter = confirm
 renderCriteria();
 $("buyer").onchange = () => { onBuyer(); if (last && draft.length) { quote = null; sent = null; render(); requestQuote(); } };
 if (DEMO) {

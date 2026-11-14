@@ -462,6 +462,26 @@ def test_built_in_reader_finds_product_allergy_and_wishes():
     assert n["budget_eur"] == 600 and n["other_wishes"] == ["Deliver to the back door"]
 
 
+def test_right_unit_for_the_product():
+    milk = client.post("/api/demo/unit-check", json={"product_terms": ["milk", "maito"]}).json()
+    choc = client.post("/api/demo/unit-check", json={"product_terms": ["chocolate", "suklaa"]}).json()
+    assert milk["unit"] == "L" and milk["share"] == 1.0                   # milk is sold by litres
+    assert choc["unit"] == "KG"                                            # chocolate by weight
+    r = client.post("/api/demo/understand", json={"buyer_id": "hotel-aurora", "message": "40 kg of milk by Monday"}).json()
+    item = r["need"]["items"][0]
+    assert item["unit"] == "KG" and item["usual_unit"]["unit"] == "L"      # kept as typed; the page warns, never changes it
+
+
+def test_delivery_notes_become_wishes_not_product_words():
+    from app.understand import parse_offline
+    from datetime import date
+    n = parse_offline("I need 1000 litres of lactose-free milk by Monday, order put it in my back door", date(2026, 11, 14))
+    assert n["items"][0]["label"] == "milk" and n["other_wishes"] == ["Put it in my back door"]
+    n = parse_offline("Deliver to the back door by Monday, 24 litres of oat drink", date(2026, 11, 14))
+    assert n["deliver_by"] == "2026-11-16" and n["items"][0]["label"] == "oat drink"      # the date isn't lost
+    assert n["other_wishes"] == ["Deliver to the back door by Monday"]
+
+
 def test_buyers_wishes_travel_with_the_order_but_are_not_rules():
     plan = run_lookup("24 litres of oat drink by Monday")["results"][0]["plan"]
     lines = [{"product_id": l["product_id"], "units": l["units"]} for l in plan["lines"]]

@@ -290,6 +290,16 @@ def api_demo_order(body: DraftOrder):
     return agent.order(body.buyer_id, body.quote_id, body.reason, body.is_substitute, body.declared_risks, body.notes)
 
 
+class UnitCheck(BaseModel):
+    product_terms: list[str]
+
+
+@app.post("/api/demo/unit-check", tags=["demo"])
+def api_unit_check(body: UnitCheck):
+    """How Valio sells a product (by litres or by kg), so the boxes can flag a wrong unit."""
+    return agent.unit_check(body.product_terms)
+
+
 @app.post("/api/demo/understand", tags=["demo"])
 def api_demo_understand(body: UnderstandRequest):
     """Read a request into criteria only (no search). The buyer checks the tick boxes, then searches."""

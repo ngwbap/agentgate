@@ -32,8 +32,17 @@ def understand(buyer_id: str, request: str) -> dict:
         return {"error": "Write what you need first."}
     need = und.understand(request, core.today())
     usage = need.pop("usage", None)
+    catalog = core.store.get_catalog()
+    for item in need.get("items", []):
+        item["usual_unit"] = catalog.usual_unit(item["product_terms"])     # e.g. milk -> L, meat -> KG
     core.audit(f"user:{buyer_id}", "request", request)
     return {"need": need, "ai_usage": {"calls": 1 if usage else 0, "usd": usage["usd"] if usage else 0}}
+
+
+def unit_check(product_terms: list[str]) -> dict:
+    """For the boxes: is this product sold by litres or by kg? Offline, no live calls."""
+    terms = [t for t in product_terms if str(t).strip()]
+    return core.store.get_catalog().usual_unit(terms) if terms else {"unit": None, "share": 0.0, "products": 0}
 
 
 def lookup(buyer_id: str, request: str, need: dict | None = None) -> dict:

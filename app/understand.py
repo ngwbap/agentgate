@@ -110,7 +110,34 @@ _ALLERGEN_WORDS = {"nut": "AN", "nuts": "AN", "pähkinä": "AN", "peanut": "AP",
                    "egg": "AE", "eggs": "AE", "soy": "AY", "fish": "AF", "sesame": "AS", "milk": "AM",
                    "hazelnut": "SH", "hazelnuts": "SH", "hasselpähkinä": "SH", "gluten": "AW", "wheat": "UW",
                    "mustard": "BM", "celery": "BC", "shellfish": "AC", "crustaceans": "AC", "lupin": "NL"}
-_WISH_START = ("deliver", "delivery", "please", "call", "leave", "ring", "bring", "toimita", "toimitus", "soita")
+_WISH_START = ("deliver", "delivery", "please", "call", "leave", "ring", "bring", "put", "drop", "place", "send it",
+               "toimita", "toimitus", "soita", "jätä")
+_WISH_WORDS = ("door", "entrance", "loading dock", "reception", "gate", "ovelle", "ovi", "takaovi")
+_DATE_WORDS = re.compile(r"\b(by|before|until|mennessä|tomorrow|huomenna|\d{4}-\d{2}-\d{2})\b|"
+                         r"(mon|tues|wednes|thurs|fri|satur|sun)day|maanantai|tiistai|keskiviikko|torstai|perjantai|lauantai|sunnuntai",
+                         re.I)
+
+
+def _split_wishes(request: str) -> tuple[list[str], str]:
+    """Delivery notes ("put it at the back door") are wishes for people, not search words.
+    Splits on sentences, ", " and " and " / " then "; a part that also holds the date stays in the text too."""
+    wishes, kept = [], []
+    for sentence in re.split(r"(?<=[.!?])\s+", request.strip()):
+        pieces = re.split(r"(,\s+|\s+and\s+|\s+then\s+)", sentence)
+        out = pieces[0:1]
+        for i in range(0, len(pieces), 2):
+            part = pieces[i].strip().strip(".!?").strip()
+            low = part.lower()
+            is_wish = bool(low) and (low.startswith(_WISH_START) or any(w in low for w in _WISH_WORDS))
+            if is_wish:
+                clean = re.sub(r"^(?:order|and|then|also|ja)\s+", "", part, flags=re.I)
+                wishes.append(clean[0].upper() + clean[1:])
+            if i == 0:
+                out = [pieces[0]] if (not is_wish or _DATE_WORDS.search(low)) else []
+            elif not is_wish or _DATE_WORDS.search(low):
+                out += [pieces[i - 1], pieces[i]]
+        kept.append("".join(out))
+    return wishes, " ".join(k for k in kept if k.strip())
 _STOP = {"i", "we", "need", "please", "buy", "order", "get", "of", "by", "the", "a", "an", "for", "find", "option",
          "that", "meets", "our", "requirements", "based", "on", "price", "and", "availability", "next", "before",
          "until", "tarvitsen", "tarvitaan", "mennessä", "ensi", "tilaa", "no", "without", "free", "lactose",
@@ -127,11 +154,9 @@ def _number(text: str) -> float:
 
 
 def parse_offline(request: str, today: date) -> dict:
-    # Sentences like "Deliver to the back door." are wishes for people, not search words.
-    wishes, kept = [], []
-    for sentence in re.split(r"(?<=[.!?])\s+", request.strip()):
-        (wishes if sentence.lower().startswith(_WISH_START) else kept).append(sentence)
-    text = " ".join(kept).lower()
+    # Notes like "Deliver to the back door" or "put it at my back door" are wishes for people, not search words.
+    wishes, kept_text = _split_wishes(request)
+    text = kept_text.lower()
     budget = None
     if b := _BUDGET.search(text):
         budget = _number(b.group(1) or b.group(2))
@@ -180,7 +205,7 @@ def parse_offline(request: str, today: date) -> dict:
         "deliver_by": deliver_by,
         "budget_eur": budget,
         "priorities": ["price"],
-        "other_wishes": [w.strip().rstrip(".!") for w in wishes if w.strip()],
+        "other_wishes": [w for w in wishes if w.strip()],
         "language": "fi" if re.search(r"[äö]|tarvitsen|litraa", text) else "en",
     }
 

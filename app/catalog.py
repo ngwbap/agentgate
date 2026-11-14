@@ -162,6 +162,19 @@ class Catalog:
     def __len__(self) -> int:
         return len(self.products)
 
+    def usual_unit(self, product_terms: list[str]) -> dict:
+        """How Valio sells this kind of product: by volume (L) or by weight (KG), from the products that match."""
+        found = self.search(product_terms, limit=200)["candidates"]
+        counts = defaultdict(int)
+        for p in found:
+            if p["content_unit"] in ("L", "KG"):
+                counts[p["content_unit"]] += 1
+        total = sum(counts.values())
+        if not total:
+            return {"unit": None, "share": 0.0, "products": 0}
+        unit = max(counts, key=counts.get)
+        return {"unit": unit, "share": round(counts[unit] / total, 2), "products": total}
+
     @staticmethod
     def meets(p: dict, *, must_claims=(), exclude_allergens=(), strict_allergens=False, content_unit=None) -> bool:
         """The same hard rules as search(), for a single product (e.g. one Valio lists as a substitute)."""
