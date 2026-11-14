@@ -23,10 +23,10 @@ from .catalog import ALLERGENS, CLAIM_NAMES, LABEL_NAMES, allergen_evidence, cla
 from .valio_api import ValioApiError, client as default_valio
 
 SHORTLIST_SEARCH = 40      # offline candidates considered
-SHORTLIST_JUDGE = 16       # sent to Claude for the relevance check
+SHORTLIST_JUDGE = 20       # sent to Claude for the relevance check (enough for 2 per common pack size)
 SUBSTITUTE_PER_IDEA = 4    # candidates per substitute idea sent to the same relevance check
 LIVE_EXACT = 10            # exact matches checked live
-LIVE_CLOSE = 3             # close variants checked live
+LIVE_CLOSE = 5             # close variants checked live
 LIVE_SUBSTITUTE = 4        # substitutes checked live, and only when needed
 VALIO_SUBS_MAX = 6         # extra products added because Valio itself lists them as substitutes
 VALIO_PICK_BONUS = 0.1     # a variant or substitute Valio recommends is a better match than one the AI guessed
