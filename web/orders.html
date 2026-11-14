@@ -4,48 +4,64 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Valio Aimo orders</title>
-<link rel="stylesheet" href="/shared.css?v=3">
+<link rel="stylesheet" href="/shared.css?v=5">
 <style>
-  /* Each order is a docket waiting to be signed: amber edge while it waits for a person. */
-  .order { margin-bottom: 14px; padding: 16px 18px; border-left: 5px solid var(--line-strong); border-radius: 0 10px 10px 0; }
-  .order.waiting { border-left-color: var(--warn-dot); }
+  #who { margin-bottom: 4px; }
+  /* Each order is a card with a coloured left edge for its status: amber while it waits for a person. */
+  .order { margin-bottom: 16px; padding: 20px 24px; border-left: 4px solid var(--line-strong); }
+  .order.waiting { border-left-color: var(--warn-edge); }
+  .order.ok { border-left-color: var(--ok-dot); }
+  .order.bad { border-left-color: var(--bad-dot); }
   .order .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .order .head b { font-size: 20px; font-weight: 800; font-variation-settings: "wdth" 112; font-variant-numeric: tabular-nums; }
-  .order .lines { margin: 12px 0; border-top: 1px dashed var(--line-strong); border-bottom: 1px dashed var(--line-strong); }
-  .order .ln { display: flex; gap: 12px; align-items: center; font-size: 14.5px; padding: 8px 0; }
+  .order .head b { font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+  .order .lines { margin: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .order .ln { display: flex; gap: 12px; align-items: center; font-size: 14.5px; padding: 10px 0; }
   .order .ln + .ln { border-top: 1px solid var(--line); }
-  .order .ln .amt { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .order .ln input { width: 80px; }
-  .actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-  .log { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
-  .log .who { color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; }
-  .hash { font-family: ui-monospace, monospace; font-size: 11px; color: var(--faint); }
-  .set { display: grid; grid-template-columns: 1fr auto; gap: 12px 16px; align-items: center; }
+  .order .ln .amt { font-weight: 600; white-space: nowrap; }
+  .order .ln input { width: 88px; }
+  .actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .log { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 14.5px; }
+  .log:last-child { border-bottom: 0; }
+  .log .who { font-weight: 600; font-size: 12.5px; background: var(--primary-soft); color: var(--primary-ink); border-radius: 99px; padding: 2px 10px; }
+  .hash { font-family: ui-monospace, monospace; font-size: 12px; color: var(--faint); }
+  .set { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; }
   .set input[type=number] { width: 120px; }
-  .agent { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
-  .switch { position: relative; width: 42px; height: 24px; flex: none; }
+  .agent { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .switch { position: relative; width: 44px; height: 24px; flex: none; }
   .switch input { opacity: 0; width: 100%; height: 100%; position: absolute; margin: 0; cursor: pointer; }
-  .switch span { position: absolute; inset: 0; background: var(--line-strong); border-radius: 99px; transition: .2s; pointer-events: none; }
-  .switch span::after { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
-  .switch input:checked + span { background: var(--accent); }
-  .switch input:checked + span::after { transform: translateX(18px); }
+  .switch span { position: absolute; inset: 0; background: var(--line-strong); border-radius: 99px; transition: background-color .2s; pointer-events: none; }
+  .switch span::after { content: ""; position: absolute; width: 20px; height: 20px; left: 2px; top: 2px; background: #fff; border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .2); transition: transform .2s; }
+  .switch input:checked + span { background: var(--primary); }
+  .switch input:checked + span::after { transform: translateX(20px); }
+  .switch input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+  @media (max-width: 560px) { .actions .row { width: 100%; } .actions .row button { flex: 1; } }
 </style>
 </head>
 <body>
-<header class="bar"><div class="in" style="max-width:800px">
-  <div class="brand">Valio Aimo<small>orders and approvals</small></div>
-  <div class="right"><select id="buyer" aria-label="Customer"></select></div>
-</div></header>
-<div class="wrap" style="max-width:800px">
-  <div class="muted" id="who" style="margin-top:18px"></div>
-  <div class="tabs" role="tablist">
-    <button data-tab="waiting" class="on">Waiting <span class="count" id="nWaiting" hidden></span></button>
-    <button data-tab="done">Done</button>
-    <button data-tab="history">History</button>
-    <button data-tab="settings">Agent settings</button>
+<header class="bar"><div class="in">
+  <div class="brand"><i class="i i-package" aria-hidden="true"></i>Valio Aimo<small>orders and approvals</small></div>
+  <div class="right">
+    <select id="buyer" aria-label="Customer"></select>
+    <span class="role hide-sm">Approver</span>
+    <span class="avatar" id="avatar" aria-hidden="true"></span>
   </div>
+</div></header>
+<div class="app">
+<nav class="side" aria-label="Sections">
+  <a id="buyLink" href="/"><i class="i i-cart" aria-hidden="true"></i>New order</a>
+  <button data-tab="waiting" class="on"><i class="i i-circle-alert" aria-hidden="true"></i>Waiting for approval <span class="count" id="nWaiting" hidden></span></button>
+  <button data-tab="done"><i class="i i-circle-check" aria-hidden="true"></i>Done</button>
+  <button data-tab="history"><i class="i i-history" aria-hidden="true"></i>History</button>
+  <button data-tab="settings"><i class="i i-sliders" aria-hidden="true"></i>Agent settings</button>
+</nav>
+<div class="wrap narrow">
+  <h1 id="title">Waiting for approval</h1>
+  <div class="muted" id="who"></div>
+  <div class="stats" id="stats"></div>
   <div id="msg"></div>
   <div id="view"></div>
+</div>
 </div>
 
 <script>
@@ -60,9 +76,11 @@ function unitWord(code, n) {
   return w ? `<abbr title="Valio unit code ${esc(code)}" style="text-decoration:none">${n == 1 ? w[0] : w[1]}</abbr>` : esc(code);
 }
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const initials = (s) => String(s || "").replace(/\(.*?\)/g, "").trim().split(/\s+/).slice(0, 2).map(w => w[0] || "").join("").toUpperCase();
 const dateText =(iso) => iso ? new Date(iso.slice(0, 10) + "T12:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "–";
 const STATUS = { pending_approval: ["warn", "Waiting for you"], confirmed: ["ok", "Confirmed"], rejected: ["bad", "Rejected"], cancelled: ["", "Withdrawn"] };
-const TAG_ICON = { money: "💶", quantity: "📦", delivery: "🚚", substitute: "🔁", agent: "🤖", settings: "✋", food: "⛔" };
+const TAG_ICON = { money: "euro", quantity: "package", delivery: "truck", substitute: "swap", agent: "bot", settings: "shield", food: "ban" };
+const ic = (name) => `<i class="i i-${name}" aria-hidden="true"></i>`;
 
 let tab = "waiting", buyers = [], orders = [], editingOrder = null, busy = false;
 const buyerId = () => $("buyer").value;
@@ -79,10 +97,10 @@ function flash(text, cls = "ok") { $("msg").innerHTML = `<div class="banner ${cl
 
 // ------------------------------------------------------------------ orders
 function tagsHtml(o) {
-  return (o.policy.tags || []).map(t => `<span class="pill ${o.policy.decision === "blocked" ? "bad" : "warn"}">${TAG_ICON[t.kind] || ""} ${esc(t.text)}</span>`).join("");
+  return (o.policy.tags || []).map(t => `<span class="pill ${o.policy.decision === "blocked" ? "bad" : "warn"}">${TAG_ICON[t.kind] ? ic(TAG_ICON[t.kind]) : ""}${esc(t.text)}</span>`).join("");
 }
 function notesHtml(o) {
-  return (o.notes || []).length ? `<div style="font-size:14px;margin:4px 0 2px">📝 <b>Buyer's wishes:</b> ${o.notes.map(esc).join(" · ")}</div>` : "";
+  return (o.notes || []).length ? `<div style="font-size:15px;margin:4px 0 2px">${ic("note")} <b>Buyer's wishes:</b> ${o.notes.map(esc).join("; ")}</div>` : "";
 }
 function orderCard(o) {
   const [cls, label] = STATUS[o.status] || ["", o.status];
@@ -101,7 +119,7 @@ function orderCard(o) {
       <details class="why"><summary>Full reasons</summary><ul>${o.policy.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
         <div style="margin-top:6px"><b>Agent's reason:</b> ${esc(o.agent_reason)}</div></details>
       <div class="actions">
-        <span style="font-size:13px;color:var(--warn)">${o.approve_by ? `🕒 Approve by ${esc(o.approve_by.replace("T", " "))} to keep the delivery date` : ""}</span>
+        <span style="font-size:14px;color:var(--warn)">${o.approve_by ? `${ic("clock")} Approve by ${esc(o.approve_by.replace("T", " "))} to keep the delivery date` : ""}</span>
         <div class="row"><button class="small ghost" onclick="withdraw('${o.order_id}')">Withdraw</button>
           <button onclick="decide('${o.order_id}', false)">Reject</button>
           <button onclick="editingOrder='${o.order_id}';draw()">Change</button>
@@ -115,7 +133,7 @@ function orderCard(o) {
       ${o.status === "rejected" && o.policy.decision === "blocked" ? `<div class="row" style="margin-top:4px">${tagsHtml(o)}</div>` : ""}
       ${o.warning ? `<div class="faint" style="color:var(--warn)">${esc(o.warning)}</div>` : ""}`;
   }
-  return `<div class="card order ${waiting ? "waiting" : ""}">
+  return `<div class="card order ${waiting ? "waiting" : cls}">
     <div class="head"><div><b>${eur(o.total_eur)}</b> <span class="faint" style="margin-left:8px">Order ${esc(o.order_id)}, delivery ${dateText(o.deliver_by)}</span></div>
       <span class="pill ${cls}">${label}</span></div>
     <div class="lines">${lines}</div>${foot}</div>`;
@@ -147,7 +165,7 @@ async function drawHistory() {
   const [audit, verify] = await Promise.all([api("/api/demo/audit"), api("/api/human/audit/verify")]);
   const mine = audit.filter(a => a.actor.endsWith(buyerId()) || a.actor.startsWith("human:"));
   $("view").innerHTML = `<div class="banner ${verify.ok ? "ok" : "bad"}" style="margin-bottom:10px">${verify.ok
-      ? `✓ History verified: ${verify.entries} entries, none changed afterwards.` : `✗ History was changed at entry #${verify.broken_at}.`}</div>
+      ? `History verified: ${verify.entries} entries, none changed afterwards.` : `History was changed at entry #${verify.broken_at}.`}</div>
     <div class="card">${mine.length ? mine.map(a => `<div class="log"><span class="faint">#${a.seq} ${esc(a.at.replace("T", " ").slice(5, 16))}</span>
       <span class="who">${esc(a.actor)}</span> ${esc(a.summary)}${a.reason ? `<div class="faint">why: ${esc(a.reason)}</div>` : ""}</div>`).join("")
       : `<div class="empty">Nothing has happened yet.</div>`}</div>`;
@@ -190,6 +208,10 @@ async function togglePause(agentId, pause) {
 function draw() {
   const waiting = orders.filter(o => o.status === "pending_approval");
   $("nWaiting").hidden = !waiting.length; $("nWaiting").textContent = waiting.length;
+  const n = (st) => orders.filter(o => o.status === st).length;
+  $("stats").innerHTML = tab === "waiting" || tab === "done" ? [["Waiting for you", waiting.length, "circle-alert", "warn"],
+      ["Confirmed", n("confirmed"), "circle-check", "ok"], ["Rejected or stopped", n("rejected"), "ban", "bad"]].map(([label, v, icon, cls]) =>
+    `<div class="card stat"><div><div class="muted">${label}</div><b>${v}</b></div><i class="i i-${icon} ${cls}" aria-hidden="true"></i></div>`).join("") : "";
   if (tab === "waiting") $("view").innerHTML = waiting.length ? waiting.map(orderCard).join("") : `<div class="empty">Nothing is waiting for you.</div>`;
   if (tab === "done") { const done = orders.filter(o => o.status !== "pending_approval");
     $("view").innerHTML = done.length ? done.map(orderCard).join("") : `<div class="empty">No finished orders yet.</div>`; }
@@ -212,13 +234,21 @@ async function loadBuyers() {
   $("buyer").innerHTML = buyers.map(b => `<option value="${b.buyer_id}" ${b.buyer_id === sel ? "selected" : ""}>${esc(b.buyer)}</option>`).join("");
   if (tab === "settings") drawSettings();
 }
-document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
-  tab = b.dataset.tab; editingOrder = null;
-  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
-  if (tab === "settings") drawSettings(); else { draw(); load(); }
-});
-$("buyer").onchange = () => { editingOrder = null; if (tab === "settings") drawSettings(); load(); history.replaceState(null, "", `/orders?buyer=${buyerId()}`); };
-loadBuyers().then(load); setInterval(() => { if (tab !== "settings") load(); }, 4000);
+// The sidebar is the navigation: each section is a view of this page, and the address keeps which one (#done, #history, ...).
+const TITLES = { waiting: "Waiting for approval", done: "Done", history: "History", settings: "Agent settings" };
+function setTab(name) {
+  tab = name in TITLES ? name : "waiting"; editingOrder = null;
+  document.querySelectorAll(".side [data-tab]").forEach(x => { const on = x.dataset.tab === tab; x.classList.toggle("on", on);
+    if (on) x.setAttribute("aria-current", "page"); else x.removeAttribute("aria-current"); });
+  $("title").textContent = TITLES[tab];
+  if (tab === "settings") { $("stats").innerHTML = ""; if (buyer()) drawSettings(); } else { if (tab === "history") $("view").innerHTML = ""; draw(); load(); }
+}
+function onBuyer() { const b = buyer(); $("buyLink").href = `/?buyer=${buyerId()}`; $("avatar").textContent = b ? initials(b.approver) : ""; }
+document.querySelectorAll(".side [data-tab]").forEach(b => b.onclick = () => {
+  history.replaceState(null, "", `/orders?buyer=${buyerId()}#${b.dataset.tab}`); setTab(b.dataset.tab); });
+window.addEventListener("hashchange", () => setTab(location.hash.slice(1)));
+$("buyer").onchange = () => { editingOrder = null; onBuyer(); if (tab === "settings") drawSettings(); load(); history.replaceState(null, "", `/orders?buyer=${buyerId()}#${tab}`); };
+loadBuyers().then(() => { onBuyer(); setTab(location.hash.slice(1)); }); setInterval(() => { if (tab !== "settings") load(); }, 4000);
 </script>
 </body>
 </html>

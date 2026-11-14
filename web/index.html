@@ -4,122 +4,190 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Valio Aimo assistant</title>
-<link rel="stylesheet" href="/shared.css?v=3">
+<link rel="stylesheet" href="/shared.css?v=5">
 <style>
-  /* The request is the hero: what the kitchen needs, in its own words. */
-  .ask { margin-top: 28px; border-radius: 16px; padding: 20px 22px 16px; border: 1px solid var(--line-strong); }
-  .ask label.q { display: block; font-size: 26px; font-weight: 800; font-variation-settings: "wdth" 112; letter-spacing: -.015em; margin-bottom: 8px; }
-  .ask textarea { width: 100%; min-height: 64px; resize: vertical; border: none; padding: 2px 0; font-size: 19px; line-height: 1.45; background: transparent; }
-  .ask textarea::placeholder { color: var(--faint); }
-  .ask textarea:focus-visible { outline: none; }
-  .ask:focus-within { border-color: var(--accent); }
-  .ask .foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line); margin-top: 10px; padding-top: 12px; }
-  .ask .hint { font-size: 13px; color: var(--muted); max-width: 52ch; }
-  #mic { border-radius: 99px; padding: 8px 16px; }
-  #mic.on { background: var(--bad-soft); border-color: var(--bad); color: var(--bad); }
+  /* Two columns inside the page: the work on the left, the order sheet (the cart) always in view on the right. */
+  .shell { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
+  main { container-type: inline-size; min-width: 0; }
 
-  /* Criteria: the boxes the agent will obey. Groups sit side by side on wide screens. */
-  .crit { margin-top: 12px; padding: 18px 20px; }
-  .crit .fields { display: grid; grid-template-columns: 2fr 1.4fr 1fr 1fr; gap: 12px; }
-  .crit label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); font-weight: 500; }
+  /* Where you are: ask, check, choose, order. A real sequence, so it is numbered. */
+  .rail { list-style: none; display: flex; margin: 0 0 20px; padding: 0; font-size: 14px; color: var(--muted); }
+  .rail li { display: flex; align-items: center; gap: 8px; flex: 1; white-space: nowrap; }
+  .rail li:last-child { flex: none; }
+  .rail li::after { content: ""; flex: 1; height: 1px; background: var(--line); margin: 0 12px; min-width: 10px; }
+  .rail li:last-child::after { display: none; }
+  .rail .n { width: 28px; height: 28px; border-radius: 50%; background: var(--wash); border: 1px solid var(--line); display: grid; place-items: center;
+    font-weight: 600; font-size: 13px; flex: none; }
+  .rail li.now { color: var(--ink); font-weight: 600; }
+  .rail li.now .n { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+  .rail li.done .n { background: var(--primary-soft); border-color: transparent; color: var(--primary-ink); }
+  .rail li.done::after { background: var(--primary); }
+  @container (max-width: 560px) { .rail li:not(.now) .t { display: none; } }
+
+  /* The request: what the kitchen needs, in its own words. */
+  .ask label.q { display: block; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
+  .ask .hint { font-size: 14px; color: var(--muted); margin: 4px 0 14px; max-width: 70ch; }
+  .ask textarea { display: block; width: 100%; min-height: 84px; resize: vertical; font-size: 16px; line-height: 1.45; padding: 10px 12px; }
+  .ask .foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  #mic.on { background: var(--bad-soft); border-color: var(--bad-dot); color: var(--bad); }
+
+  /* Criteria: the boxes the agent will obey. */
+  .crit { margin-top: 16px; }
+  .crit .fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .crit label.f > input { width: 100%; }
+  .crit label.f { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--ink); font-weight: 500; }
   .crit .groups { display: grid; grid-template-columns: 1.25fr 1.35fr 0.8fr; gap: 6px 22px; margin-top: 16px; }
-  .crit .group > .t { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
+  .crit .group > .t { font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
   .crit .group > .t .faint { font-weight: 400; }
   .crit .wide { grid-column: 1 / -1; }
-  @media (max-width: 820px) { .crit .fields { grid-template-columns: 1fr 1fr; } .crit .groups { grid-template-columns: 1fr; } }
-  .tick { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; padding: 5px 11px; border-radius: 4px; border: 1px solid var(--line-strong);
-    cursor: pointer; margin: 0 6px 6px 0; user-select: none; background: var(--paper); }
-  .tick input { margin: 0; accent-color: var(--accent); }
-  .tick.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
-  .tick .n { font-size: 11.5px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
-  .tick.on .n { color: var(--accent); }
-  .crit .note { font-size: 12.5px; color: var(--faint); margin: 2px 0 6px; }
-  .crit .forwhat { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 14px; color: var(--ink); }
-  .crit .forwhat b { color: var(--accent); }
-  .req { color: var(--bad); }
-  .wishes { margin: 0 0 6px; padding-left: 18px; font-size: 14px; }
+  @container (max-width: 700px) { .crit .fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .crit .groups { grid-template-columns: minmax(0, 1fr); } }
+  @container (max-width: 440px) { .crit .fields { grid-template-columns: minmax(0, 1fr); } }
+  .tick { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 500; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line);
+    cursor: pointer; margin: 0 6px 6px 0; user-select: none; background: var(--paper); transition: background-color .15s, border-color .15s; }
+  .tick:hover { background: var(--wash); }
+  .tick:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .tick input { margin: 0; accent-color: var(--primary); width: 16px; height: 16px; }
+  .tick.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary-ink); font-weight: 600; }
+  .tick .n { font-size: 12.5px; font-weight: 500; color: var(--faint); }
+  .tick.on .n { color: var(--primary-ink); }
+  .crit .note { font-size: 13px; color: var(--faint); margin: 2px 0 6px; }
+  .crit .forwhat { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 15px; color: var(--ink); }
+  .crit .forwhat b { color: var(--primary-ink); }
+  .req { color: var(--bad-dot); }
+  .wishes { margin: 0 0 6px; padding-left: 18px; font-size: 14.5px; }
   .crit .go { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line);
-    margin-top: 14px; padding-top: 14px; }
-  #find { padding: 10px 26px; font-size: 16px; }
+    margin-top: 16px; padding-top: 16px; }
+  #find { padding: 0 28px; min-height: 44px; font-size: 15px; }
 
-  /* Plans: the status band is the one loud element. Green = Valio's own stock, amber = not guaranteed. */
-  .plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-  .plan { cursor: pointer; padding: 0; overflow: hidden; border-radius: 10px; border: 1px solid var(--line); }
-  .plan:hover { border-color: var(--line-strong); }
-  .plan.sel { border: 2px solid var(--accent); }
-  .plan .band { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 13px; font-weight: 600; }
+  /* Ways to get it: cards that lift on hover. The band says where the stock is: green = Valio's own, amber = not guaranteed. */
+  .plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  .plan { cursor: pointer; padding: 0; overflow: hidden; transition: box-shadow .2s, border-color .2s; }
+  .plan:hover { box-shadow: var(--shadow-lg); }
+  .plan.sel { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary), var(--shadow-sm); }
+  .plan .band { display: flex; align-items: center; gap: 8px; padding: 8px 16px; font-size: 13.5px; font-weight: 600; }
   .plan .band.ok { background: var(--ok-soft); color: var(--ok); }
   .plan .band.warn { background: var(--warn-soft); color: var(--warn); }
-  .plan .body { padding: 12px 14px 12px; }
+  .plan .body { padding: 14px 16px 12px; }
   .plan .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .plan .label { font-size: 20px; font-weight: 800; font-variation-settings: "wdth" 115; letter-spacing: -.01em; }
-  .plan.sel .label { color: var(--accent); }
-  .plan .price { font-weight: 800; font-size: 20px; font-variation-settings: "wdth" 108; }
+  .plan .label { font-size: 18px; font-weight: 600; letter-spacing: -.015em; display: inline-flex; align-items: center; gap: 8px; }
+  /* Choose one: a radio mark shows which way is in the order sheet. */
+  .plan .label::before { content: ""; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--line-strong); flex: none; }
+  .plan.sel .label::before { border: 5px solid var(--primary); }
+  .plan .price { font-weight: 700; font-size: 20px; }
   .plan .what { margin: 6px 0 2px; font-size: 14px; color: var(--muted); min-height: 42px; }
-  .plan .note { font-size: 12.5px; color: var(--muted); }
-  .badge-top { margin-top: 6px; font-size: 12px; cursor: pointer; }
+  .plan .note { font-size: 13px; color: var(--muted); }
+  .badge-top { margin-top: 6px; cursor: pointer; }
   .stars { white-space: nowrap; letter-spacing: 1px; font-size: 14px; }
-  .stars + b { display: inline-block; min-width: 2.1em; text-align: right; font-variant-numeric: tabular-nums; }
+  .stars + b { display: inline-block; min-width: 2.1em; text-align: right; }
   .crit-row > span:first-child { flex: 1; text-align: left; }
   .st { color: var(--line-strong); position: relative; display: inline-block; }
   .st.on { color: var(--star); }
   .st.half::before { content: "★"; position: absolute; left: 0; top: 0; width: 50%; overflow: hidden; color: var(--star); }
   .rating { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 6px; }
-  .crit-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; padding: 3px 6px; border-radius: 4px;
-    background: none; border: none; width: 100%; color: var(--ink); font-weight: 400; }
-  .crit-row:hover, .crit-row.on { background: var(--ice-2); }
+  .crit-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; padding: 4px 6px; border-radius: 6px;
+    background: none; border: none; width: 100%; color: var(--ink); font-weight: 400; min-height: 32px; }
+  .crit-row:hover, .crit-row.on { background: var(--wash); }
   .crit-row.inline { width: auto; border: 1px solid var(--line); padding: 2px 10px; }
-  .explain { display: block; background: var(--ice-2); border-left: 4px solid var(--accent); border-radius: 0; padding: 12px 16px; margin-top: 12px; font-size: 14px; max-width: 80ch; }
+  .crit-row .i { color: var(--faint); font-size: 13px; }
+  .explain { display: block; background: var(--primary-soft); border-left: 4px solid var(--primary); border-radius: 8px; padding: 12px 16px; margin-top: 12px; font-size: 14.5px; max-width: 80ch; }
 
-  /* The draft order reads like a delivery docket: rows, hairlines, totals lined up on the right. */
-  .docket { padding: 4px 18px; border-radius: 10px 10px 0 0; border-bottom: none; }
-  .line { display: grid; grid-template-columns: 64px 1fr auto 110px; gap: 16px; align-items: center; padding: 16px 0; }
-  .line + .line { border-top: 1px dashed var(--line-strong); }
-  .line .name { font-weight: 700; font-size: 16px; }
-  .line .meta { color: var(--faint); font-size: 12.5px; display: flex; gap: 12px; flex-wrap: wrap; }
-  .line .total { font-weight: 800; text-align: right; font-size: 17px; }
-  @media (max-width: 720px) { .line { grid-template-columns: 52px 1fr; } .line .qty, .line .total { grid-column: 2; text-align: left; } }
+  /* The draft order: one row per product, totals lined up on the right. */
+  .docket { padding: 4px 24px; }
+  .line { display: grid; grid-template-columns: 64px 1fr auto 110px; gap: 16px; align-items: center; padding: 18px 0; }
+  .line + .line { border-top: 1px solid var(--line); }
+  .line .name { font-weight: 600; font-size: 16px; }
+  .line .meta { color: var(--faint); font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .line .total { font-weight: 700; text-align: right; font-size: 18px; }
+  @container (max-width: 620px) { .line { grid-template-columns: 52px 1fr; } .line .qty, .line .total { grid-column: 2; text-align: left; } }
   .alt-wrap { grid-column: 1 / -1; margin-top: -8px; }
-  .alt-table { border: 1px solid var(--line); border-radius: 8px; padding: 2px 12px; margin-top: 6px; background: var(--frost); }
-  .alt-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 118px 78px 112px 122px 84px; gap: 10px; align-items: center;
-    padding: 8px 0; font-size: 13.5px; }
+  .alt-table { border: 1px solid var(--line); border-radius: 8px; padding: 2px 12px; margin-top: 6px; background: var(--page); }
+  .alt-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 118px 78px 112px 122px 92px; gap: 10px; align-items: center;
+    padding: 8px 0; font-size: 14px; }
   .alt-row + .alt-row { border-top: 1px solid var(--line); }
-  .alt-row.head { font-size: 12px; color: var(--muted); padding: 7px 0 5px; }
-  .alt-row.cur { background: var(--accent-soft); margin: 0 -12px; padding: 8px 12px; }
+  .alt-row.head { font-size: 12.5px; font-weight: 500; color: var(--muted); padding: 8px 0 6px; }
+  .alt-row.cur { background: var(--primary-soft); margin: 0 -12px; padding: 8px 12px; }
   .alt-row .num { text-align: right; }
   .alt-row .crit-row { width: auto; }
   .alt-row .thumb.sm { width: 48px; } .alt-row .thumb.sm b { font-size: 11px; white-space: nowrap; }
-  @media (max-width: 820px) {
+  @container (max-width: 760px) {
     .alt-row { grid-template-columns: 44px minmax(0, 1fr) auto auto; }
     .alt-row > :nth-child(3), .alt-row > :nth-child(4), .alt-row > :nth-child(6) { display: none; }
   }
-  .checkout { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 0;
-    border-radius: 0 0 10px 10px; border-top: 3px solid var(--fjord); }
-  @media (min-height: 860px) { .checkout { position: sticky; bottom: 12px; box-shadow: 0 -2px 0 var(--frost); } }
-  .checkout .sum { font-size: 24px; font-weight: 800; font-variation-settings: "wdth" 110; }
-  #result.stale { opacity: .38; pointer-events: none; filter: grayscale(.4); transition: opacity .2s; }
-  .demo { border: 1px dashed var(--line-strong); border-radius: 8px; padding: 10px 12px; margin-top: 24px; font-size: 13px; }
+  #result.stale, .sheet .stale { opacity: .4; pointer-events: none; filter: grayscale(.4); transition: opacity .2s; }
+  .demo { border: 1px dashed var(--line-strong); border-radius: 8px; padding: 12px 14px; margin-top: 28px; font-size: 14px; }
   .funnel span { white-space: nowrap; }
+
+  /* The order sheet: the cart. What was asked, what is in the order, the total, who must approve. */
+  .sheet-wrap { position: sticky; top: 88px; }
+  .sheet { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow-sm); padding: 24px;
+    max-height: calc(100vh - 112px); overflow: auto; }
+  .sheet h2 { margin: 0; display: flex; align-items: center; gap: 8px; }
+  .sheet h2 .i { color: var(--primary); }
+  .sheet p { margin: 0; }
+  .sheet .rule { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+  .sheet-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; padding: 20px 0 8px; color: var(--muted); }
+  .sheet-empty .i { font-size: 44px; color: var(--line-strong); margin-bottom: 8px; }
+  .sheet-empty b { font-size: 16px; font-weight: 500; }
+  .sheet-empty span { font-size: 13px; color: var(--faint); }
+  .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 14.5px; padding: 3px 0; }
+  .kv .k { color: var(--muted); } .kv .v { font-weight: 600; } .kv > :last-child { text-align: right; }
+  .sl { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; font-size: 14.5px; padding: 6px 0; align-items: start; }
+  .sl .src { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .sl > :last-child { font-weight: 600; }
+  .sheet-total { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .sheet-total .sum { font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+  /* The door's answer, as a tinted card with a coloured left edge. */
+  .verdict { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; padding: 10px 12px; border-radius: 8px; border-left: 4px solid; font-size: 14.5px; }
+  .verdict .i { margin-top: 2px; }
+  .verdict.ok { background: var(--ok-soft); color: var(--ok); border-left-color: var(--ok-dot); }
+  .verdict.warn { background: var(--warn-soft); color: var(--warn); border-left-color: var(--warn-edge); }
+  .verdict.bad { background: var(--bad-soft); color: var(--bad); border-left-color: var(--bad-dot); }
+  .verdict .muted { display: block; font-size: 13px; color: inherit; opacity: .85; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .sheet-foot button.primary { width: 100%; margin-top: 14px; min-height: 44px; font-size: 15px; }
+
+  /* Narrower screens: one column, the sheet follows the work, and its total with the send button becomes a bar at the bottom. */
+  @media (max-width: 1200px) {
+    .shell { grid-template-columns: minmax(0, 1fr); }
+    .sheet-wrap { position: static; }
+    .sheet { max-height: none; }
+    .sheet-foot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; background: var(--paper); border-top: 1px solid var(--line);
+      box-shadow: 0 -4px 12px rgba(16, 24, 40, .08); padding: 10px 16px 12px; max-height: 60vh; overflow: auto; }
+    .sheet-foot .sheet-total .sum { font-size: 22px; }
+    .sheet-foot button.primary { margin-top: 8px; }
+    .wrap { padding-bottom: 220px; }
+  }
 </style>
 </head>
 <body>
 <header class="bar"><div class="in">
-  <div class="brand">Valio Aimo<small>buying assistant</small></div>
+  <div class="brand"><i class="i i-package" aria-hidden="true"></i>Valio Aimo<small>buying assistant</small></div>
   <div class="right">
     <select id="buyer" aria-label="Customer"></select>
-    <a class="btn" id="ordersLink" href="/orders" target="agentgate-orders">Orders <span class="count" id="waiting" hidden></span></a>
+    <span class="role hide-sm">Buyer</span>
+    <span class="avatar" id="avatar" aria-hidden="true"></span>
   </div>
 </div></header>
-<div class="wrap">
+<div class="app">
+<nav class="side" aria-label="Sections">
+  <a class="on" href="/" aria-current="page"><i class="i i-cart" aria-hidden="true"></i>New order</a>
+  <a id="ordersLink" data-orders="waiting" href="/orders" target="agentgate-orders"><i class="i i-circle-alert" aria-hidden="true"></i>Waiting for approval <span class="count" id="waiting" hidden></span></a>
+  <a data-orders="done" href="/orders#done" target="agentgate-orders"><i class="i i-circle-check" aria-hidden="true"></i>Done</a>
+  <a data-orders="history" href="/orders#history" target="agentgate-orders"><i class="i i-history" aria-hidden="true"></i>History</a>
+  <a data-orders="settings" href="/orders#settings" target="agentgate-orders"><i class="i i-sliders" aria-hidden="true"></i>Agent settings</a>
+</nav>
+<div class="wrap"><div class="shell">
+<main>
+  <ol class="rail" id="rail" aria-label="Steps"></ol>
   <div class="card ask">
     <label class="q" for="msg">What does your kitchen need?</label>
+    <div class="hint">Write or say it in English or Finnish. Nothing changes until you press Confirm request, which puts it in the boxes below. Or fill the boxes in yourself.</div>
     <textarea id="msg" placeholder="1,000 litres of lactose-free milk by Monday, max 1,200 €. Deliver to the back door."></textarea>
     <div class="foot">
-      <div class="hint">Write or say it in English or Finnish. Nothing changes until you press Confirm request, which puts it in the boxes below. Or fill the boxes in yourself.</div>
       <div class="row">
         <span id="voice" class="row" hidden>
-          <select id="voiceLang" aria-label="Speech language" style="padding:7px 8px"><option value="en-GB">English</option><option value="fi-FI">Suomi</option></select>
-          <button id="mic" aria-label="Speak your request">🎤 Speak</button>
+          <select id="voiceLang" aria-label="Speech language"><option value="en-GB">English</option><option value="fi-FI">Suomi</option></select>
+          <button id="mic"><i class="i i-mic" aria-hidden="true"></i>Speak</button>
         </span>
         <button id="fill" class="primary">Confirm request</button>
       </div>
@@ -137,6 +205,9 @@
     </div>
     <div id="demoOut" class="muted" style="margin-top:8px"></div>
   </div>
+</main>
+<aside class="sheet-wrap" aria-label="Order sheet"><div class="sheet" id="sheet"></div></aside>
+</div></div>
 </div>
 
 <script>
@@ -202,6 +273,7 @@ function dateText(iso) { return iso ? new Date(iso + "T12:00").toLocaleDateStrin
 
 // ------------------------------------------------------------------ criteria (tick boxes)
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const initials = (s) => String(s || "").replace(/\(.*?\)/g, "").trim().split(/\s+/).slice(0, 2).map(w => w[0] || "").join("").toUpperCase();
 function tick(on, label, handler, n) {
   return `<label class="tick ${on ? "on" : ""}"><input type="checkbox" ${on ? "checked" : ""} onchange="${handler}">${esc(label)}${n != null ? `<span class="n">${n}</span>` : ""}</label>`;
 }
@@ -269,7 +341,7 @@ function renderCriteria() {
   const items = crit.items.length > 1 ? `<div class="row" style="margin-bottom:10px"><span class="faint">Your request has ${crit.items.length} products:</span>${crit.items.map((x, i) =>
     `<button class="small ${i === ci ? "primary" : ""}" onclick="ci=${i};renderCriteria()">${esc(x.label || "Product " + (i + 1))}</button>`).join("")}</div>` : "";
   const prios = crit.priorities.filter(p => p in PRIORITY);
-  $("criteria").innerHTML = `${fillInfo ? `<div class="banner" style="background:var(--soft);margin-bottom:12px;font-size:13px">${fillInfo}</div>` : ""}${items}
+  $("criteria").innerHTML = `${fillInfo ? `<div class="banner ai" style="margin-bottom:14px">${fillInfo}</div>` : ""}${items}
     <div class="fields">
       <label class="f"><span>Product <span class="req">*</span></span><input value="${esc(it.label)}" placeholder="lactose-free milk" onchange="setLabel(this.value)"></label>
       <label class="f">Amount<div class="row" style="flex-wrap:nowrap;gap:6px"><input type="number" min="0" step="any" class="grow" value="${it.quantity ?? ""}" placeholder="1 pack"
@@ -284,12 +356,45 @@ function renderCriteria() {
       <div class="group wide"><div class="t">What matters most <span class="faint">${crit.items.length > 1 ? "For the whole order. " : ""}Tick any. They count equally and each gets a star rating${prios.length ? "." : ". With none ticked, price counts."}</span></div>
         ${Object.entries(PRIORITY).map(([k, v]) => tick(prios.includes(k), v, `setPrio('${k}')`)).join("")}</div>
       <div class="group wide"><div class="t">Other wishes <span class="faint">Not a search filter. They travel with the order so the approver sees them.</span></div>
-        <ul class="wishes">${crit.other_wishes.map((w, i) => `<li>${esc(w)} <button class="ghost small" aria-label="Remove wish" onclick="crit.other_wishes.splice(${i}, 1); renderCriteria()">✕</button></li>`).join("")}</ul>
+        <ul class="wishes">${crit.other_wishes.map((w, i) => `<li>${esc(w)} <button class="ghost small" aria-label="Remove wish" onclick="crit.other_wishes.splice(${i}, 1); renderCriteria()"><i class="i i-x" aria-hidden="true"></i></button></li>`).join("")}</ul>
         <input id="c_wish" placeholder="Add a wish and press Enter, for example: deliver to the back door" style="width:100%" onkeydown="if (event.key === 'Enter') addWish(this.value)"></div>
     </div>
     <div id="c_err" style="color:var(--bad);font-size:13px;margin-top:8px"></div>
     <div class="go"><span class="muted">Only the product is required. Change anything before you search.</span>
       <div class="row"><button class="ghost" onclick="clearCriteria()">Clear</button><button class="primary" id="find" onclick="find()">Find</button></div></div>`;
+  renderSheet(); renderRail();
+}
+// ------------------------------------------------------------------ step rail and order sheet (always in view)
+const STEPS = ["Ask", "Check the boxes", "Choose a way", "Order"], UNIT_NAME = { L: "litres", KG: "kg", PCS: "pieces" };
+const isStale = () => $("result").classList.contains("stale");
+function stepNow() {
+  if (sent) return 5;
+  if (last && !isStale()) return draft.length && quote && !quote.error ? 4 : 3;
+  return crit.items.some(it => (it.label || "").trim()) ? 2 : 1;
+}
+function renderRail() {
+  const now = stepNow();
+  $("rail").innerHTML = STEPS.map((t, i) => { const n = i + 1, cls = n < now ? "done" : n === now ? "now" : "";
+    return `<li class="${cls}" ${n === now ? `aria-current="step"` : ""}><span class="n">${n < now ? `<i class="i i-check" aria-hidden="true"></i>` : n}</span><span class="t">${t}${n < now ? `<span class="sr"> (done)</span>` : ""}</span></li>`; }).join("");
+}
+function renderSheet() { $("sheet").innerHTML = sheetHtml(); }
+function sheetHtml() {
+  const b = buyers.find(x => x.buyer_id === buyerId());
+  const items = crit.items.filter(it => (it.label || "").trim());
+  let h = `<h2><i class="i i-cart" aria-hidden="true"></i>Order sheet</h2><div class="faint">${b ? esc(b.buyer) : "&nbsp;"}</div><hr class="rule">`;
+  if (!items.length) return h + `<div class="sheet-empty"><i class="i i-cart" aria-hidden="true"></i><b>Your order sheet is empty</b><span>Say what your kitchen needs to get started. The total and who must approve it show up here.</span></div>`;
+  h += items.map(it => `<div class="kv"><span class="v">${esc(cap(it.label))}</span><span class="num">${it.quantity ? num(it.quantity) + " " + UNIT_NAME[it.unit] : "Amount not set"}</span></div>`).join("")
+    + `<div class="kv"><span class="k">Deliver by</span><span>${crit.deliver_by ? dateText(crit.deliver_by) : "Not set"}</span></div>`
+    + `<div class="kv"><span class="k">Budget</span><span class="num">${crit.budget_eur ? eur(crit.budget_eur) : "No limit"}</span></div>`;
+  if (!last || !draft.length) return h + `<hr class="rule"><p class="muted">${last ? "No way to get this yet. Change the boxes and press Find." : "Press Find to see the ways to get it."}</p>`;
+  const lines = draft.map(d => {
+    const o = opt(d.product_id) || {};
+    const cls = o.status === "in_stock" ? "ok" : (o.status === "partial" || o.status === "supplier") ? "warn" : "bad";
+    const where = { in_stock: "Valio stock", partial: "Partly in stock", supplier: "Supplier stock" }[o.status] || "Unavailable";
+    return `<div class="sl"><span class="num">${num(d.units)} ×</span>
+      <span>${esc(shortName(o.name || ""))}<span class="src"><span class="dot ${cls}"></span>${where}${d.match !== "exact" ? `, ${d.match === "close" ? "close variant" : "substitute"}` : ""}</span></span>
+      <span class="num">${eur((o.unit_price_eur || 0) * d.units)}</span></div>`; }).join("");
+  return h + `<hr class="rule"><div class="${isStale() ? "stale" : ""}">${last.results.length > 1 ? `<div class="faint">For ${esc(res().item.label)}</div>` : ""}${lines}<hr class="rule">${footHtml()}</div>`;
 }
 function setLabel(v) {
   const it = cur(); v = v.trim();
@@ -340,6 +445,7 @@ function markStale() {
   if (!last || $("result").classList.contains("stale")) return;
   $("result").classList.add("stale");
   $("status").innerHTML = `<div class="banner warn">You changed the boxes after this search, so the results below are out of date. Press Find to update them.</div>`;
+  renderSheet(); renderRail();
 }
 function markFresh() { $("result").classList.remove("stale"); }
 function setBusy(on, text) {
@@ -399,7 +505,7 @@ async function find() {
   const items = crit.items.filter(it => (it.label || "").trim());
   if (!items.length) { $("c_err").textContent = "Write which product you need. It's the only required box."; return; }
   const need = { ...crit, items: items.map(it => ({ ...it, product_terms: it.product_terms.length ? it.product_terms : [it.label], quantity: it.quantity || 0 })) };
-  sent = null; quote = null; $("result").innerHTML = ""; markFresh();
+  sent = null; quote = null; last = null; draft = []; $("result").innerHTML = ""; markFresh(); renderSheet(); renderRail();
   setBusy(true, "Finding the best way to get it… about 20 seconds.");
   try {
     const r = await post("/api/demo/lookup", { buyer_id: buyerId(), message: $("msg").value.trim() || items.map(i => i.label).join(", "), need });
@@ -423,7 +529,8 @@ function selectPlan(j) {
 function render() {
   if (!last) return;
   const r = res();
-  $("result").innerHTML = assumptionsHtml() + plansHtml(r) + draftHtml(r) + checkoutHtml();
+  $("result").innerHTML = assumptionsHtml() + plansHtml(r) + draftHtml(r);
+  renderSheet(); renderRail();
   if (DEMO) demoStats();
 }
 
@@ -431,7 +538,7 @@ function assumptionsHtml() {
   const items = last.results.length > 1 ? `<div class="row" style="margin-top:18px"><span class="faint">Results for</span>${last.results.map((x, i) =>
     `<button class="small ${i === itemIdx ? "primary" : ""}" onclick="itemIdx=${i};selectPlan(0)">${esc(x.item.label)}</button>`).join("")}</div>` : "";
   const a = (last.assumptions || []).filter(x => x.field !== "budget_eur");
-  return items + (a.length ? `<div class="banner warn" style="margin-top:14px;font-size:14px">⚠ ${a.map(x => esc(x.text)).join(" · ")}</div>` : "");
+  return items + (a.length ? `<div class="banner warn" style="margin-top:14px;">${a.map(x => esc(x.text)).join(" ")}</div>` : "");
 }
 
 function planWhat(p) {
@@ -445,9 +552,9 @@ function planWhat(p) {
 }
 function shortName(n) { return n.length > 38 ? n.slice(0, 36) + "…" : n; }
 function planBand(p) {
-  if (p.confidence === "confirmed") return `<div class="band ok"><span class="dot ok"></span>In Valio stock, confirmed</div>`;
-  if (p.confidence === "partly confirmed") return `<div class="band warn"><span class="dot warn"></span>Partly in Valio stock</div>`;
-  return `<div class="band warn"><span class="dot warn"></span>Supplier stock, not guaranteed</div>`;
+  if (p.confidence === "confirmed") return `<div class="band ok"><i class="i i-check" aria-hidden="true"></i>In Valio stock, confirmed</div>`;
+  if (p.confidence === "partly confirmed") return `<div class="band warn"><i class="i i-alert" aria-hidden="true"></i>Partly in Valio stock</div>`;
+  return `<div class="band warn"><i class="i i-alert" aria-hidden="true"></i>Supplier stock, not guaranteed</div>`;
 }
 function planNote(p) {
   if (p.lines.every(l => l.match === "exact")) return "";
@@ -471,18 +578,18 @@ function plansHtml(r) {
       ${planBand(p)}<div class="body">
       <div class="top"><span class="label">${esc(p.label)}</span><span class="price">${eur(p.total_eur)}</span></div>
       ${p.highest_rated ? `<button class="pill badge-top ${explain && explain.j === j && explain.k === "_top" ? "accent" : "ok"}"
-          onclick="event.stopPropagation(); toggleExplain(${j}, '_top')" title="Why?">★ Highest rated <span class="faint">ⓘ</span></button>` : ""}
+          onclick="event.stopPropagation(); toggleExplain(${j}, '_top')" title="Why?">★ Highest rated <i class="i i-info" aria-hidden="true"></i></button>` : ""}
       <div class="what">${planWhat(p)}</div>
       ${planNote(p)}
       ${p.over_budget ? `<div class="faint" style="color:var(--bad);margin-top:4px">Over your budget</div>` : ""}
       ${p.rating_stars != null && p.criteria.length ? `<div class="rating">
         <div class="crit-row" style="font-weight:600"><span>Overall</span>${starRow(p.rating_stars)}</div>
         ${p.criteria.map(k => `<button class="crit-row ${explain && explain.j === j && explain.k === k ? "on" : ""}" title="Why?"
-            onclick="event.stopPropagation(); toggleExplain(${j}, '${k}')"><span>${esc(p.ratings[k].name)} <span class="faint">ⓘ</span></span>${starRow(p.ratings[k].stars)}</button>`).join("")}
+            onclick="event.stopPropagation(); toggleExplain(${j}, '${k}')"><span>${esc(p.ratings[k].name)} <i class="i i-info" aria-hidden="true"></i></span>${starRow(p.ratings[k].stars)}</button>`).join("")}
       </div>` : ""}
     </div></div>`).join("")}</div>
     ${ex ? `<div class="explain"><b>${esc(r.plans[explain.j].label)} · ${esc(ex.name)}${ex.stars != null ? ": " + ex.stars.toFixed(1) + "★" : ""}</b>
-      <button class="ghost small" style="float:right" onclick="explain=null;render()" aria-label="Close">✕</button><div style="margin-top:4px">${esc(ex.why)}</div></div>` : ""}`;
+      <button class="ghost small" style="float:right" onclick="explain=null;render()" aria-label="Close"><i class="i i-x" aria-hidden="true"></i></button><div style="margin-top:4px">${esc(ex.why)}</div></div>` : ""}`;
 }
 
 function alternatives(line) {
@@ -560,30 +667,31 @@ function draftHtml(r) {
   }).join("")}</div>`;
 }
 
-function checkoutHtml() {
-  if (!draft.length) return "";
-  if (sent) return `<div style="margin-top:16px">${sent}</div>`;
+// Bottom of the order sheet: total, whether the door lets it through, and the one button that sends it.
+function footHtml() {
+  if (sent) return `<div class="sheet-foot">${sent}</div>`;
   const local = draft.reduce((s, d) => s + (opt(d.product_id)?.unit_price_eur || 0) * d.units, 0);
   const covered = draft.reduce((s, d) => s + (opt(d.product_id)?.content_per_sales_unit || 0) * d.units, 0);
   const want = res().item.quantity, unit = res().item.unit;
   const short = unit !== "PCS" && covered < want - 1e-6 ? `<div class="faint" style="color:var(--warn)">This covers ${num(covered)} of the ${num(want)} ${esc(unit)} you asked for.</div>` : "";
-  let verdict = `<div class="row muted"><div class="spinner"></div>Checking today's fixed price…</div>`, action = "";
-  if (quote && quote.error) verdict = `<div style="color:var(--bad);font-size:14px">${esc(quote.error)}</div>` +
+  const says = (cls, ic, head, rest) => `<div class="verdict ${cls}"><i class="i i-${ic}" aria-hidden="true"></i><div><b>${head}</b>${rest ? `<span class="muted">${rest}</span>` : ""}</div></div>`;
+  let verdict = `<div class="row muted" style="margin-top:10px"><div class="spinner"></div>Checking today's fixed price…</div>`, action = "";
+  if (quote && quote.error) verdict = says("bad", "ban", esc(quote.error)) +
       (res().plans.length > 1 ? `<button class="ghost" onclick="selectPlan(${(planIdx + 1) % res().plans.length})">Try the next way</button>` : "");
   else if (quote) {
     const pv = quote.policy_preview, held = quote.valid_until.slice(11, 16);
-    const tags = (pv.tags || []).map(t => `<span class="pill ${pv.decision === "blocked" ? "bad" : "warn"}">${esc(t.text)}</span>`).join("");
-    if (pv.decision === "blocked") { verdict = `<div style="color:var(--bad);font-size:14px">Can't be ordered: ${esc(pv.reasons.join(" "))}</div><div class="row" style="margin-top:4px">${tags}</div>`; }
+    const tags = (pv.tags || []).length ? `<div class="tags">${pv.tags.map(t => `<span class="pill ${pv.decision === "blocked" ? "bad" : "warn"}">${esc(t.text)}</span>`).join("")}</div>` : "";
+    if (pv.decision === "blocked") verdict = says("bad", "ban", "Can't be ordered", esc(pv.reasons.join(" "))) + tags;
     else if (pv.decision === "needs_human_approval") {
-      verdict = `<div class="muted">${esc(pv.approver)} will approve. Price held until ${held}.</div><div class="row" style="margin-top:4px">${tags}</div>`;
+      verdict = says("warn", "alert", `The ${esc(pv.approver)} must approve`, `Price held until ${held}.`) + tags;
       action = `<button class="primary" onclick="send()">Send for approval</button>`;
     } else {
-      verdict = `<div style="color:var(--ok);font-size:14px">Within your rules, so the agent can order this now. Price held until ${held}.</div>`;
+      verdict = says("ok", "check", "Within your rules", `The agent can order this now. Price held until ${held}.`);
       action = `<button class="primary" onclick="send()">Place order</button>`;
     }
   }
   const total = quote && !quote.error ? quote.total_eur : local;
-  return `<div class="card checkout"><div class="grow"><div class="sum">Total ${eur(total)} <span class="faint" style="font-weight:400;font-variation-settings:'wdth' 100">excl. VAT</span></div>${short}${verdict}</div>${action}</div>`;
+  return `<div class="sheet-foot"><div class="sheet-total"><span>Total <span class="faint">excl. VAT</span></span><span class="sum">${eur(total)}</span></div>${short}${verdict}${action}</div>`;
 }
 
 // ------------------------------------------------------------------ draft editing
@@ -625,7 +733,7 @@ async function send() {
       is_substitute: draft.some(d => d.match !== "exact"), declared_risks: declaredRisks(), notes: last.need.other_wishes || [] });
     if (o.error) throw new Error(o.error);
     const link = `<a href="/orders?buyer=${buyerId()}" target="agentgate-orders">${esc(o.order_id)}</a>`;
-    sent = o.status === "confirmed" ? `<div class="banner ok">✓ Order ${link} placed: ${eur(o.total_eur)}, delivery ${dateText(o.deliver_by)}.</div>`
+    sent = o.status === "confirmed" ? `<div class="banner ok">Order ${link} placed: ${eur(o.total_eur)}, delivery ${dateText(o.deliver_by)}.</div>`
       : o.status === "pending_approval" ? `<div class="banner warn">Sent to the ${esc(o.policy.approver)} for approval: order ${link}, ${eur(o.total_eur)}.${o.approve_by ? ` Approve by ${esc(o.approve_by.replace("T", " "))} to keep the delivery date.` : ""}</div>`
       : `<div class="banner bad">The door rejected order ${link}: ${esc(o.policy.reasons.join(" "))}</div>`;
   } catch (e) { sent = `<div class="banner bad">${esc(e.message)}</div>`; }
@@ -637,7 +745,7 @@ async function pollOrders() {
   try {
     const orders = await api(`/api/demo/orders?buyer_id=${buyerId()}`);
     const n = orders.filter(o => o.status === "pending_approval").length;
-    $("waiting").hidden = !n; $("waiting").textContent = n + " waiting";
+    $("waiting").hidden = !n; $("waiting").textContent = n; $("waiting").setAttribute("aria-label", n + " waiting");
   } catch (e) { /* the badge is a convenience */ }
 }
 async function loadBuyers() {
@@ -646,7 +754,12 @@ async function loadBuyers() {
   $("buyer").innerHTML = buyers.map(b => `<option value="${b.buyer_id}" ${b.buyer_id === want ? "selected" : ""}>${esc(b.buyer)}</option>`).join("");
   onBuyer();
 }
-function onBuyer() { $("ordersLink").href = `/orders?buyer=${buyerId()}`; pollOrders(); }
+function onBuyer() {
+  document.querySelectorAll("[data-orders]").forEach(a => a.href = `/orders?buyer=${buyerId()}#${a.dataset.orders}`);
+  const b = buyers.find(x => x.buyer_id === buyerId());
+  $("avatar").textContent = b ? initials(b.buyer) : "";
+  pollOrders(); renderSheet();
+}
 
 function demoStats() {
   const r = res(), f = r.funnel;
@@ -659,7 +772,7 @@ function demoStats() {
 }
 
 $("fill").onclick = () => fill();
-$("criteria").addEventListener("change", markStale);      // any box edited (amount, date, ticks, ...)
+$("criteria").addEventListener("change", () => { markStale(); renderSheet(); renderRail(); });      // any box edited (amount, date, ticks, ...)
 
 // Voice: speak the request (hands-free), then the boxes are filled in from it. Uses the browser's own
 // speech recognition (Chrome, Edge); the button is hidden where the browser doesn't offer it.
@@ -699,7 +812,7 @@ if (Speech) {
   function finish() {
     const said = (finalText + " " + interim).trim();
     rec = null; listening = false; clearTimeout(silence); interim = ""; show();
-    $("mic").classList.remove("on"); $("mic").textContent = "🎤 Speak";
+    $("mic").classList.remove("on"); $("mic").innerHTML = `<i class="i i-mic" aria-hidden="true"></i>Speak`;
     // Voice only types into the request box. The buyer reads it and presses Confirm request.
     if (said && !fatal) $("status").innerHTML = `<div class="banner" style="background:var(--soft)">Got it. Check the text in the request box, then press Confirm request.</div>`;
     else if (!fatal && $("status").textContent.startsWith("Listening")) $("status").innerHTML = "";
@@ -707,7 +820,7 @@ if (Speech) {
   $("mic").onclick = () => {
     if (listening) { stopListening(); return; }
     listening = true; fatal = false; before = $("msg").value.trim(); finalText = ""; interim = ""; startedAt = Date.now();
-    $("mic").classList.add("on"); $("mic").textContent = "■ Stop";
+    $("mic").classList.add("on"); $("mic").innerHTML = `<i class="i i-stop" aria-hidden="true"></i>Stop`;
     $("status").innerHTML = `<div class="banner" style="background:var(--soft)"><div class="spinner"></div>Listening… say what, how much and by when. Pause for 4 seconds or press Stop when you're done. Then check the text and press Confirm request.</div>`;
     try { startSession(); } catch (err) { fatal = true; finish(); }
     setTimeout(() => { if (listening && !(finalText + interim).trim()) stopListening(); }, 10000);   // nothing said at all
