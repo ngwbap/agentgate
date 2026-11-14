@@ -34,6 +34,8 @@
   .tick .n { font-size: 11.5px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
   .tick.on .n { color: var(--accent); }
   .crit .note { font-size: 12.5px; color: var(--faint); margin: 2px 0 6px; }
+  .crit .forwhat { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 14px; color: var(--ink); }
+  .crit .forwhat b { color: var(--accent); }
   .req { color: var(--bad); }
   .wishes { margin: 0 0 6px; padding-left: 18px; font-size: 14px; }
   .crit .go { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line);
@@ -241,8 +243,12 @@ function choicesHtml() {
   const fin = it.preferred_labels.some(l => FINNISH.includes(l)) || crit.priorities.includes("finnish_origin");
   const org = it.preferred_labels.some(l => ORGANIC.includes(l)) || crit.priorities.includes("organic");
   const what = esc(it.label || "this product");
-  const head = L.live ? `<div class="note" style="margin-top:14px">Choices that fit the ${L.total}${L.total >= 200 ? "+" : ""} products matching “${what}”. The number shows how many products have it.</div>`
-    : `<div class="note" style="margin-top:14px">Type the product to see only the choices that fit it.</div>`;
+  // Say plainly which product these boxes belong to: with several products, each has its own ticks.
+  const many = crit.items.length > 1;
+  const forWhat = `<div class="forwhat">Choices for <b>${esc(cap(it.label || "Product " + (ci + 1)))}</b>${many
+    ? `<span class="faint"> · product ${ci + 1} of ${crit.items.length}. Ticks here apply to this product only.</span>` : ""}</div>`;
+  const head = forWhat + (L.live ? `<div class="note">Choices that fit the ${L.total}${L.total >= 200 ? "+" : ""} products matching “${what}”. The number shows how many products have it.</div>`
+    : `<div class="note">Type the product to see only the choices that fit it.</div>`);
   const everywhere = L.everywhere.filter(a => !it.exclude_allergens.includes(a));
   const allNote = everywhere.length ? `<div class="note">Every match contains ${everywhere.map(a => ALLERGENS[a]).join(", ")}, so ${everywhere.length > 1 ? "they aren't" : "it isn't"} offered here.</div>` : "";
   const prefer = [L.showLabel("finnish") || fin ? tick(fin, "Finnish", "togglePref('finnish')", L.labelN("finnish")) : "",
@@ -275,7 +281,7 @@ function renderCriteria() {
     <div id="unitWarn">${unitWarnHtml()}</div>
     <div id="choiceBox">${choicesHtml()}</div>
     <div class="groups">
-      <div class="group wide"><div class="t">What matters most <span class="faint">Tick any. They count equally and each gets a star rating${prios.length ? "." : ". With none ticked, price counts."}</span></div>
+      <div class="group wide"><div class="t">What matters most <span class="faint">${crit.items.length > 1 ? "For the whole order. " : ""}Tick any. They count equally and each gets a star rating${prios.length ? "." : ". With none ticked, price counts."}</span></div>
         ${Object.entries(PRIORITY).map(([k, v]) => tick(prios.includes(k), v, `setPrio('${k}')`)).join("")}</div>
       <div class="group wide"><div class="t">Other wishes <span class="faint">Not a search filter. They travel with the order so the approver sees them.</span></div>
         <ul class="wishes">${crit.other_wishes.map((w, i) => `<li>${esc(w)} <button class="ghost small" aria-label="Remove wish" onclick="crit.other_wishes.splice(${i}, 1); renderCriteria()">✕</button></li>`).join("")}</ul>
