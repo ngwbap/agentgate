@@ -31,6 +31,9 @@
     cursor: pointer; margin: 0 6px 6px 0; user-select: none; background: var(--paper); }
   .tick input { margin: 0; accent-color: var(--accent); }
   .tick.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .tick .n { font-size: 11.5px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .tick.on .n { color: var(--accent); }
+  .crit .note { font-size: 12.5px; color: var(--faint); margin: 2px 0 6px; }
   .req { color: var(--bad); }
   .wishes { margin: 0 0 6px; padding-left: 18px; font-size: 14px; }
   .crit .go { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line);
@@ -148,7 +151,11 @@ const PRIORITY = { price: "Price", reliability: "Reliability", low_co2: "Carbon 
 let explain = null, lineExplain = null;      // which criterion's reasoning is open (plan card / product)
 let openAlts = new Set(), altWhy = null;     // which products' comparison table is open; whose stars are explained
 const FINNISH = ["GOODS_FROM_FINLAND_BLUE_SWAN", "MADE_IN_FINLAND_FLAG_WITH_KEY", "FINNISH_HEART_SYMBOL"], ORGANIC = ["EU_ORGANIC_FARMING"];
-const MAIN_CLAIMS = ["FREE_FROM_LACTOSE", "FREE_FROM_GLUTEN", "VEGAN", "FREE_FROM_EGGS"], MAIN_ALLERGENS = ["AM", "AW", "AE", "AP", "AN", "SH"];
+// Shown before a product is typed. Once it is, the boxes come from the matching products (see choiceLists).
+const MAIN_CLAIMS = ["FREE_FROM_LACTOSE", "FREE_FROM_GLUTEN", "VEGAN"], MAIN_ALLERGENS = ["AM", "AE", "AP", "AN", "SH", "AY"];
+// A label and an ingredient that ask the same thing: offer only one (the label for gluten, the ingredient for egg and soy).
+const PAIRS = [["FREE_FROM_GLUTEN", "AW", "claim"], ["FREE_FROM_EGGS", "AE", "allergen"], ["FREE_FROM_SOY", "AY", "allergen"]];
+const SHOW_CLAIMS = 4, SHOW_ALLERGENS = 6;
 
 let buyers = [], last = null, itemIdx = 0, planIdx = 0, draft = [], quote = null, quoteTimer = null, quoteSeq = 0, editing = false, sent = null;
 const blankItem = () => ({ label: "", product_terms: [], quantity: null, unit: "L", must_claims: [], exclude_allergens: [],
@@ -177,9 +184,13 @@ function unitWord(code, n) {
   if (!w) return esc(code);
   return `<abbr title="Valio unit code ${esc(code)}" style="text-decoration:none">${n === 1 ? w[0] : w[1]}</abbr>`;
 }
-function icon(o) {      // shelf-label tile: the real pack size instead of a stock photo
-  if (!o || !o.content_per_sales_unit) return `<b>${unitWord((o && o.sales_unit) || "", 1)}</b>`;
-  return `<b>${num(o.content_per_sales_unit)} ${esc(o.content_unit === "PCS" ? "pcs" : o.content_unit)}</b><small>per ${unitWord(o.sales_unit, 1)}</small>`;
+function icon(o) {      // product photo from Valio Aimo's shop, with the real pack size on a shelf-label strip
+  const label = (!o || !o.content_per_sales_unit) ? `<b>${unitWord((o && o.sales_unit) || "", 1)}</b>`
+    : `<b>${num(o.content_per_sales_unit)} ${esc(o.content_unit === "PCS" ? "pcs" : o.content_unit)}</b><small>per ${unitWord(o.sales_unit, 1)}</small>`;
+  return photo(o && o.image_url) + `<span class="pk">${label}</span>`;
+}
+function photo(url) {   // no photo, or it fails to load -> the tile falls back to the pack-size label
+  return url ? `<img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : "";
 }
 function stock(o) {
   const cls = o.status === "in_stock" ? "ok" : (o.status === "partial" || o.status === "supplier") ? "warn" : "bad";
@@ -189,17 +200,66 @@ function dateText(iso) { return iso ? new Date(iso + "T12:00").toLocaleDateStrin
 
 // ------------------------------------------------------------------ criteria (tick boxes)
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-function tick(on, label, handler) {
-  return `<label class="tick ${on ? "on" : ""}"><input type="checkbox" ${on ? "checked" : ""} onchange="${handler}">${esc(label)}</label>`;
+function tick(on, label, handler, n) {
+  return `<label class="tick ${on ? "on" : ""}"><input type="checkbox" ${on ? "checked" : ""} onchange="${handler}">${esc(label)}${n != null ? `<span class="n">${n}</span>` : ""}</label>`;
+}
+// Which boxes to offer for this product. With the matching products known, a box shows only if it splits them:
+// "avoid milk" for milk would remove every product, so it isn't offered. Ticked boxes always stay.
+function choiceLists(it) {
+  const ch = it.usual_unit && it.usual_unit.choices, total = ch ? ch.matched : 0;
+  const live = total > 0, splits = (n) => n > 0 && n < total;
+  const byCount = (counts) => (a, b) => (counts[b] || 0) - (counts[a] || 0);
+  let claims = live ? Object.keys(CLAIMS).filter(c => splits(ch.claims[c] || 0)).sort(byCount(ch.claims)) : [...MAIN_CLAIMS];
+  let allergens = live ? Object.keys(ALLERGENS).filter(a => splits(ch.allergens[a] || 0)).sort(byCount(ch.allergens)) : [...MAIN_ALLERGENS];
+  let moreClaims = live ? claims.splice(SHOW_CLAIMS) : Object.keys(CLAIMS).filter(c => !claims.includes(c));
+  let moreAllergens = live ? allergens.splice(SHOW_ALLERGENS) : Object.keys(ALLERGENS).filter(a => !allergens.includes(a));
+  for (const [c, a, pref] of PAIRS) {      // one box per question
+    const cOn = it.must_claims.includes(c), aOn = it.exclude_allergens.includes(a);
+    const hasC = [...claims, ...moreClaims].includes(c), hasA = [...allergens, ...moreAllergens].includes(a);
+    let drop;                              // the ticked side wins; else the preferred side, if these products offer it
+    if (cOn) drop = "allergen";
+    else if (aOn) drop = "claim";
+    else if (pref === "claim") drop = hasC ? "allergen" : "claim";
+    else drop = hasA ? "claim" : "allergen";
+    if (drop === "allergen" && !aOn) { allergens = allergens.filter(x => x !== a); moreAllergens = moreAllergens.filter(x => x !== a); }
+    if (drop === "claim" && !cOn) { claims = claims.filter(x => x !== c); moreClaims = moreClaims.filter(x => x !== c); }
+  }
+  const keep = (shown, extra, ticked) => [...new Set([...shown, ...(more ? extra : []), ...ticked])];
+  return {
+    live, total,
+    claims: keep(claims, moreClaims, it.must_claims), allergens: keep(allergens, moreAllergens, it.exclude_allergens),
+    hidden: moreClaims.length + moreAllergens.length,
+    everywhere: live ? Object.keys(ALLERGENS).filter(a => ch.allergens[a] === total) : [],
+    claimN: (c) => live ? ch.claims[c] || 0 : null, allergenN: (a) => live ? ch.allergens[a] || 0 : null,
+    labelN: (k) => live ? ch.labels[k] || 0 : null, showLabel: (k) => !live || splits(ch.labels[k] || 0),
+  };
+}
+function choicesHtml() {
+  const it = cur(), L = choiceLists(it);
+  const fin = it.preferred_labels.some(l => FINNISH.includes(l)) || crit.priorities.includes("finnish_origin");
+  const org = it.preferred_labels.some(l => ORGANIC.includes(l)) || crit.priorities.includes("organic");
+  const what = esc(it.label || "this product");
+  const head = L.live ? `<div class="note" style="margin-top:14px">Choices that fit the ${L.total}${L.total >= 200 ? "+" : ""} products matching “${what}”. The number shows how many products have it.</div>`
+    : `<div class="note" style="margin-top:14px">Type the product to see only the choices that fit it.</div>`;
+  const everywhere = L.everywhere.filter(a => !it.exclude_allergens.includes(a));
+  const allNote = everywhere.length ? `<div class="note">Every match contains ${everywhere.map(a => ALLERGENS[a]).join(", ")}, so ${everywhere.length > 1 ? "they aren't" : "it isn't"} offered here.</div>` : "";
+  const prefer = [L.showLabel("finnish") || fin ? tick(fin, "Finnish", "togglePref('finnish')", L.labelN("finnish")) : "",
+    L.showLabel("organic") || org ? tick(org, "Organic", "togglePref('organic')", L.labelN("organic")) : ""].join("");
+  const moreBtn = !L.live || L.hidden || more ? `<button class="ghost small" onclick="more = !more; renderCriteria()">${more ? "Fewer options" : L.live ? `More options (${L.hidden})` : "More options"}</button>` : "";
+  return `${head}<div class="groups" style="margin-top:6px">
+      <div class="group"><div class="t">Must be</div>${L.claims.map(c => tick(it.must_claims.includes(c), CLAIMS[c] || c.toLowerCase().replace(/_/g, " "), `toggle('must_claims','${c}')`, L.claimN(c))).join("")
+        || `<div class="note">No labels to choose between here.</div>`}</div>
+      <div class="group"><div class="t">Avoid</div>${L.allergens.map(a => tick(it.exclude_allergens.includes(a), cap(ALLERGENS[a] || a), `toggle('exclude_allergens','${a}')`, L.allergenN(a))).join("")}
+        ${!L.allergens.length && !allNote ? `<div class="note">No allergens to avoid in these products.</div>` : ""}${allNote}
+        ${it.exclude_allergens.length || it.strict_allergens ? tick(it.strict_allergens, "Strict allergy check (school, daycare, hospital)", "cur().strict_allergens = !cur().strict_allergens; renderCriteria()") : ""}
+        ${moreBtn}</div>
+      <div class="group"><div class="t">Prefer</div>${prefer || `<div class="note">No Finnish or organic labels to choose between here.</div>`}</div>
+    </div>`;
 }
 function renderCriteria() {
   const it = cur();
   const items = crit.items.length > 1 ? `<div class="row" style="margin-bottom:10px"><span class="faint">Your request has ${crit.items.length} products:</span>${crit.items.map((x, i) =>
     `<button class="small ${i === ci ? "primary" : ""}" onclick="ci=${i};renderCriteria()">${esc(x.label || "Product " + (i + 1))}</button>`).join("")}</div>` : "";
-  const claims = [...new Set([...MAIN_CLAIMS, ...(more ? Object.keys(CLAIMS) : []), ...it.must_claims])];
-  const allergens = [...new Set([...MAIN_ALLERGENS, ...(more ? Object.keys(ALLERGENS) : []), ...it.exclude_allergens])];
-  const fin = it.preferred_labels.some(l => FINNISH.includes(l)) || crit.priorities.includes("finnish_origin");
-  const org = it.preferred_labels.some(l => ORGANIC.includes(l)) || crit.priorities.includes("organic");
   const prios = crit.priorities.filter(p => p in PRIORITY);
   $("criteria").innerHTML = `${fillInfo ? `<div class="banner" style="background:var(--soft);margin-bottom:12px;font-size:13px">${fillInfo}</div>` : ""}${items}
     <div class="fields">
@@ -211,12 +271,8 @@ function renderCriteria() {
       <label class="f">Budget (€)<input type="number" min="0" step="any" value="${crit.budget_eur ?? ""}" placeholder="No limit" onchange="crit.budget_eur = this.value ? Number(this.value) : null"></label>
     </div>
     <div id="unitWarn">${unitWarnHtml()}</div>
+    <div id="choiceBox">${choicesHtml()}</div>
     <div class="groups">
-      <div class="group"><div class="t">Must be</div>${claims.map(c => tick(it.must_claims.includes(c), CLAIMS[c] || c.toLowerCase().replace(/_/g, " "), `toggle('must_claims','${c}')`)).join("")}</div>
-      <div class="group"><div class="t">Avoid</div>${allergens.map(a => tick(it.exclude_allergens.includes(a), cap(ALLERGENS[a] || a), `toggle('exclude_allergens','${a}')`)).join("")}
-        ${tick(it.strict_allergens, "Strict allergy check (school, daycare, hospital)", "cur().strict_allergens = !cur().strict_allergens; renderCriteria()")}
-        <button class="ghost small" onclick="more = !more; renderCriteria()">${more ? "Fewer options" : "More options"}</button></div>
-      <div class="group"><div class="t">Prefer</div>${tick(fin, "Finnish", "togglePref('finnish')")}${tick(org, "Organic", "togglePref('organic')")}</div>
       <div class="group wide"><div class="t">What matters most <span class="faint">Tick any. They count equally and each gets a star rating${prios.length ? "." : ". With none ticked, price counts."}</span></div>
         ${Object.entries(PRIORITY).map(([k, v]) => tick(prios.includes(k), v, `setPrio('${k}')`)).join("")}</div>
       <div class="group wide"><div class="t">Other wishes <span class="faint">Not a search filter. They travel with the order so the approver sees them.</span></div>
@@ -248,6 +304,7 @@ async function checkUnit() {
   try { it.usual_unit = terms[0] ? await post("/api/demo/unit-check", { product_terms: terms }) : null; }
   catch (e) { it.usual_unit = null; }
   if (it === cur() && $("unitWarn")) $("unitWarn").innerHTML = unitWarnHtml();
+  if (it === cur() && $("choiceBox")) $("choiceBox").innerHTML = choicesHtml();      // boxes that fit this product
 }
 function toggle(field, v) { const a = cur()[field], i = a.indexOf(v); i < 0 ? a.push(v) : a.splice(i, 1); renderCriteria(); }
 function togglePref(kind) {
@@ -289,14 +346,34 @@ async function fill() {
   try {
     const r = await post("/api/demo/understand", { buyer_id: buyerId(), message: text });
     if (r.error) throw new Error(r.error);
-    const n = r.need;
-    crit = { items: n.items.map(it => ({ ...blankItem(), ...it })), deliver_by: n.deliver_by || null, budget_eur: n.budget_eur || null,
-             priorities: n.priorities && n.priorities.length ? n.priorities : ["price"], other_wishes: n.other_wishes || [], language: n.language || "en" };
-    ci = 0;
-    // The request box is cleared for the next request; what was asked stays visible here.
-    fillInfo = `Confirmed: “${esc(text.replace(/[.!?\s]+$/, ""))}”. ` + (n.engine === "offline parser"
-      ? "The AI isn't available right now, so the simple built-in reader did this. Please check carefully."
-      : "Check and change anything, then press Find.");
+    const n = r.need, said = esc(text.replace(/[.!?\s]+$/, ""));
+    const hasOrder = crit.items.some(it => (it.label || "").trim());
+    if (n.adds_to_current_order) {
+      // No product named: this updates the order being made. Change only what was said; keep the rest.
+      if (!hasOrder) { $("status").innerHTML = `<div class="banner warn">I couldn't find a product in “${said}”. Say which product you need, for example “24 litres of oat drink”.</div>`; return false; }
+      if (n.deliver_by) crit.deliver_by = n.deliver_by;
+      if (n.budget_eur) crit.budget_eur = n.budget_eur;
+      const extra = (n.priorities || []).filter(p => p !== "price");
+      if (extra.length) crit.priorities = [...new Set([...crit.priorities, ...extra])];
+      crit.other_wishes = [...new Set([...crit.other_wishes, ...(n.other_wishes || [])])];
+      const src = n.items[0], it = cur();
+      if (src) {
+        it.must_claims = [...new Set([...it.must_claims, ...(src.must_claims || [])])];
+        it.exclude_allergens = [...new Set([...it.exclude_allergens, ...(src.exclude_allergens || [])])];
+        it.strict_allergens = it.strict_allergens || !!src.strict_allergens;
+        it.preferred_labels = [...new Set([...it.preferred_labels, ...(src.preferred_labels || [])])];
+      }
+      fillInfo = `Added to your current order: “${said}”. Everything else stays as it was.`;
+    } else {
+      // A product named: one order at a time, so this replaces the boxes.
+      crit = { items: n.items.map(it => ({ ...blankItem(), ...it })), deliver_by: n.deliver_by || null, budget_eur: n.budget_eur || null,
+               priorities: n.priorities && n.priorities.length ? n.priorities : ["price"], other_wishes: n.other_wishes || [], language: n.language || "en" };
+      ci = 0;
+      fillInfo = `Confirmed: “${said}”. ` + (n.engine === "offline parser"
+        ? "The AI isn't available right now, so the simple built-in reader did this. Please check carefully."
+        : "Check and change anything, then press Find.");
+    }
+    // The request box is cleared for the next request; what was asked stays visible in the note above the boxes.
     $("msg").value = "";
     $("status").innerHTML = ""; renderCriteria(); markStale(); return true;
   } catch (e) { $("status").innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; return false; }

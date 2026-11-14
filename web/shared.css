@@ -73,6 +73,15 @@ button.small, .btn.small { padding: 4px 10px; font-size: 13px; }
 .thumb b { font-size: 15px; font-weight: 800; font-variation-settings: "wdth" 112; }
 .thumb small { font-size: 10.5px; color: var(--muted); }
 .thumb.sm { width: 44px; height: 44px; } .thumb.sm b { font-size: 12px; } .thumb.sm small { font-size: 9.5px; }
+.thumb .pk { display: flex; flex-direction: column; align-items: center; }
+/* With a photo from Valio Aimo's shop: photo fills the tile, pack size sits on a strip at the bottom. */
+.thumb { position: relative; overflow: hidden; }
+.thumb:has(img) { background: #fff; padding: 0; box-shadow: inset 0 0 0 1px var(--line); justify-content: flex-start; }
+.thumb img { width: 100%; height: 100%; object-fit: contain; padding: 3px; }
+.thumb:has(img) .pk { position: absolute; left: 0; right: 0; bottom: 0; flex-direction: row; justify-content: center; gap: 3px;
+  background: #0E2A47; color: #fff; padding: 1px 2px; white-space: nowrap; }
+.thumb:has(img) .pk b { font-size: 10.5px; } .thumb:has(img) .pk small { display: none; }
+.thumb.sm:has(img) .pk b { font-size: 9px; }
 
 .banner { border-radius: 8px; padding: 11px 14px; display: flex; gap: 10px; align-items: center; }
 .banner.ok { background: var(--ok-soft); color: var(--ok); } .banner.warn { background: var(--warn-soft); color: var(--warn); }

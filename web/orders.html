@@ -88,7 +88,7 @@ function orderCard(o) {
   const [cls, label] = STATUS[o.status] || ["", o.status];
   const waiting = o.status === "pending_approval", editing = editingOrder === o.order_id;
   const lines = o.lines.map((l, k) => `<div class="ln">
-      <div class="thumb sm">${l.content && l.quantity ? `<b>${(l.content / l.quantity).toLocaleString("en-GB", { maximumFractionDigits: 1 })} ${esc(l.content_unit)}</b><small>per ${unitWord(l.unit, 1)}</small>` : `<b>${unitWord(l.unit, 1)}</b>`}</div>
+      <div class="thumb sm">${l.image_url ? `<img src="${esc(l.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}<span class="pk">${l.content && l.quantity ? `<b>${(l.content / l.quantity).toLocaleString("en-GB", { maximumFractionDigits: 1 })} ${esc(l.content_unit)}</b><small>per ${unitWord(l.unit, 1)}</small>` : `<b>${unitWord(l.unit, 1)}</b>`}</span></div>
       <div class="grow">${editing ? `<input type="number" min="0" value="${l.quantity}" data-k="${k}" aria-label="Quantity"> ${unitWord(l.unit, 2)} of` : `<b>${l.quantity} ${unitWord(l.unit, l.quantity)}</b> of`} ${esc(l.name)}
         <div class="faint" style="display:flex;gap:12px;flex-wrap:wrap">${l.content ? `<span>${Math.round(l.content).toLocaleString("en-GB")} ${esc(l.content_unit)} in total</span>` : ""}<span>${l.stock_source === "supplier" ? "From the supplier" : "Valio stock"}</span>${l.price_basis ? `<span>${esc(cap(l.price_basis))}</span>` : ""}</div></div>
       <div class="amt">${eur(l.line_total_eur)}</div></div>`).join("");

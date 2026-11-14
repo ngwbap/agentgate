@@ -123,3 +123,11 @@ Status when written: **3 small edits already applied** in `understand.py`: `NEED
 - ~~Update `docs/DESIGN.md` and `docs/AGENT_INTERFACE_SPEC.md`~~ done 14 Nov (spec is now v0.2).
 - Delete the unused old mock file `data/catalog.json` by hand (tool guard blocks it).
 - Pitch prep: webshop "before" (search "lactose free milk" → milk chocolate first), 2-minute video, deck.
+
+## Product photos (`data/valio/images.json`, git-ignored)
+Barcode (GTIN) -> photo URL on Valio Aimo's shop (`https://api.valioaimo.fi/medias/...`, loads without login).
+Built on 14 Nov 2026 from a signed-in session at toimitustukku.valioaimo.fi: paged through the shop's own product search
+(`/rest/v2/toimitustukku/products/search`, empty query, 100 per page, 183 pages = 18,215 products) and kept `ean -> PRIMARY image`.
+The shop's product codes are NOT our product ids; matching is by barcode (sales unit, Synkka and every unit's GTIN).
+Covers 13,494 of 17,546 products (77%). `app/catalog.py` adds `image_url`; tiles show the photo with the pack size on a strip,
+and fall back to the pack-size label when there is no photo or it fails to load. Without the file everything still works.

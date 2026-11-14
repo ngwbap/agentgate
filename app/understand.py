@@ -76,7 +76,10 @@ SYSTEM = (
     "Set strict_allergens for allergies and for school, daycare or hospital kitchens. "
     "Put a stated spending limit in budget_eur; leave deliver_by and budget_eur null when not stated. "
     "A wish for Finnish products goes in preferred_labels (Finnish labels) and priorities (finnish_origin); organic "
-    "likewise. Put every remaining wish that no field can hold in other_wishes, never drop it."
+    "likewise. Put every remaining wish that no field can hold in other_wishes, never drop it. "
+    "If the request names no product at all (it only adds a budget, date, allergy, priority or delivery note to an "
+    "order already being made), return exactly one item with label \"\", product_terms [], quantity 0 and only the "
+    "requirements that were stated; never invent a product."
 )
 
 
@@ -86,7 +89,7 @@ def understand(request: str, today: date) -> dict:
         try:
             data, usage = llm.ask_json(SYSTEM, f"Today is {today.isoformat()} ({today.strftime('%A')}).\n\nRequest: {request}",
                                        NEED_SCHEMA)
-            if data.get("items"):
+            if isinstance(data.get("items"), list):          # an empty list is a valid answer: no product named
                 return {**data, "engine": usage["model"], "usage": usage}
         except llm.LLMUnavailable:
             pass
@@ -142,7 +145,9 @@ _STOP = {"i", "we", "need", "please", "buy", "order", "get", "of", "by", "the", 
          "that", "meets", "our", "requirements", "based", "on", "price", "and", "availability", "next", "before",
          "until", "tarvitsen", "tarvitaan", "mennessä", "ensi", "tilaa", "no", "without", "free", "lactose",
          "gluten", "kitchen", "hotel", "school", "hospital", "with", "some", "about", "needs", "our", "us",
-         "pupil", "child", "children", "kids", "has", "have", "allergy", "allergic", "allergies", "is", "are"}
+         "pupil", "child", "children", "kids", "has", "have", "allergy", "allergic", "allergies", "is", "are",
+         "my", "budget", "euro", "euros", "eur", "max", "maximum", "cost", "costs", "spend", "change", "make", "it",
+         "also", "add", "set", "only", "want", "would", "like", "can", "you", "budjetti", "euroa"}
 
 
 _BUDGET = re.compile(r"(?:max(?:imum)?|budget(?: of)?|under|up to|at most|enintään|maks(?:imissaan)?|alle)\s*"
@@ -192,12 +197,12 @@ def parse_offline(request: str, today: date) -> dict:
     terms = []
     for w in words:
         terms.append(_FI_EN.get(w, w))
-    product = " ".join(dict.fromkeys(terms)) or "product"
+    product = " ".join(dict.fromkeys(terms))   # empty = no product named (e.g. "my budget is 50 euro")
     return {
         # Search for the whole name ("chocolate cookies" = both words), plus the Finnish words we translated,
         # never each English word alone ("chocolate" alone would bring every chocolate bar).
-        "items": [{"label": product, "product_terms": list(dict.fromkeys([product, *[w for w in words if w in _FI_EN]])),
-                   "quantity": quantity,
+        "items": [{"label": product, "product_terms": list(dict.fromkeys([product, *[w for w in words if w in _FI_EN]])) if product else [],
+                   "quantity": quantity if product else 0,
                    "unit": unit, "must_claims": claims, "exclude_allergens": exclude,
                    "strict_allergens": any(w in text for w in ("allergy", "allergic", "school", "hospital", "daycare",
                                                                 "koulu", "sairaala", "päiväkoti", "allergia")),

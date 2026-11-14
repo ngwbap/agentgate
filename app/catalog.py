@@ -38,6 +38,7 @@ LABEL_NAMES = {
     "MARINE_STEWARDSHIP_COUNCIL_LABEL": "MSC", "FAIR_TRADE_MARK": "Fairtrade",
     "AQUACULTURE_STEWARDSHIP_COUNCIL": "ASC", "KRAV_MARK": "KRAV",
 }
+FINNISH_LABELS = ("GOODS_FROM_FINLAND_BLUE_SWAN", "MADE_IN_FINLAND_FLAG_WITH_KEY", "FINNISH_HEART_SYMBOL")
 # Claims can also be evidenced by product names when the structured field is missing.
 CLAIM_NAME_HINTS = {
     "FREE_FROM_LACTOSE": ("laktoositon", "lactose free", "lactose-free", "laktosfri"),
@@ -96,7 +97,14 @@ def _read_csv(path: Path, value_col: str) -> dict[str, float]:
         return {row["productId"]: float(row[value_col]) for row in csv.DictReader(f) if row.get(value_col)}
 
 
-def build_product(p: dict, reliability: dict, co2: dict) -> dict:
+def _read_images(path: Path) -> dict[str, str]:
+    """Barcode -> photo URL on Valio Aimo's shop. Optional: without the file, tiles show the pack size."""
+    if not path.exists():
+        return {}
+    return {gtin: url for gtin, url in json.loads(path.read_text(encoding="utf-8")).items() if url}
+
+
+def build_product(p: dict, reliability: dict, co2: dict, images: dict | None = None) -> dict:
     sd = p.get("synkkaData") or {}
     names = sd.get("names") or []
     units = {u["unitId"]: float(u.get("sizeInBaseUnits") or 1) for u in p.get("units") or []}
@@ -132,6 +140,9 @@ def build_product(p: dict, reliability: dict, co2: dict) -> dict:
         "temperature": p.get("temperatureCondition"),
         "data_updated": sd.get("lastUpdated"),
         "gtin": p.get("salesUnitGtin") or sd.get("gtin"),
+        # Product photo from Valio Aimo's web shop, matched by barcode (see docs/HANDOFF.md).
+        "image_url": next((images[g] for g in [p.get("salesUnitGtin"), sd.get("gtin"),
+                           *[u.get("gtin") for u in p.get("units") or []]] if g and g in (images or {})), None),
         # Valio's own rule list: products that can replace this one when it is not available.
         "valio_substitutes": [s["substituteProduct"] for s in p.get("substitutions") or []
                               if s.get("product") == p["id"] and s.get("substituteProduct") not in (None, p["id"])],
@@ -157,7 +168,8 @@ class Catalog:
         raw = json.loads((data_dir / "products.json").read_text(encoding="utf-8"))
         reliability = _read_csv(data_dir / "delivery_reliability.csv", "deliveryReliability")
         co2 = _read_csv(data_dir / "carbon_footprint.csv", "AVG kg CO2-eq/kg")
-        return cls([build_product(p, reliability, co2) for p in raw if not p.get("deleted")])
+        images = _read_images(data_dir / "images.json")
+        return cls([build_product(p, reliability, co2, images) for p in raw if not p.get("deleted")])
 
     def __len__(self) -> int:
         return len(self.products)
@@ -170,10 +182,28 @@ class Catalog:
             if p["content_unit"] in ("L", "KG"):
                 counts[p["content_unit"]] += 1
         total = sum(counts.values())
+        choices = self.choices(found)
         if not total:
-            return {"unit": None, "share": 0.0, "products": 0}
+            return {"unit": None, "share": 0.0, "products": 0, "choices": choices}
         unit = max(counts, key=counts.get)
-        return {"unit": unit, "share": round(counts[unit] / total, 2), "products": total}
+        return {"unit": unit, "share": round(counts[unit] / total, 2), "products": total, "choices": choices}
+
+    @staticmethod
+    def choices(found: list[dict]) -> dict:
+        """Which tick boxes mean something for these products: how many have each claim, contain each
+        allergen, or carry a Finnish / organic label. A box every product passes, or none does, filters nothing."""
+        claims, allergens = defaultdict(int), defaultdict(int)
+        finnish = organic = 0
+        for p in found:
+            for c in CLAIM_NAMES:
+                if claim_proof(p, c):
+                    claims[c] += 1
+            for code in set(p["contains"]):
+                allergens[code] += 1
+            finnish += any(l in FINNISH_LABELS for l in p["labels"])
+            organic += "EU_ORGANIC_FARMING" in p["labels"]
+        return {"matched": len(found), "claims": dict(claims), "allergens": dict(allergens),
+                "labels": {"finnish": finnish, "organic": organic}}
 
     @staticmethod
     def meets(p: dict, *, must_claims=(), exclude_allergens=(), strict_allergens=False, content_unit=None) -> bool:
@@ -302,7 +332,7 @@ def public_view(p: dict) -> dict:
     return {
         "product_id": p["id"], "name": p["name"], "name_fi": p["name_fi"], "brand": p["brand"],
         "sales_unit": p["sales_unit"], "content_per_sales_unit": p["content_per_sales_unit"],
-        "content_unit": p["content_unit"], "origin": p["origin"],
+        "content_unit": p["content_unit"], "origin": p["origin"], "image_url": p.get("image_url"),
         "claims": [CLAIM_NAMES.get(c, c) for c in p["claims"]],
         "labels": [LABEL_NAMES.get(l, l) for l in p["labels"]],
         "contains_allergens": [ALLERGENS.get(a, a) for a in p["contains"]],

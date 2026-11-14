@@ -214,7 +214,7 @@ def build_option(p: dict, item: dict, deliver_by: str | None, avail: dict | None
         tier = 4
     return {
         "product_id": p["id"], "name": p["name"], "name_fi": p["name_fi"], "brand": p["brand"], "origin": p["origin"],
-        "match": relevance.get("match", "exact"), "match_reason": relevance.get("reason", ""),
+        "image_url": p.get("image_url"), "match": relevance.get("match", "exact"), "match_reason": relevance.get("reason", ""),
         "sales_unit": p["sales_unit"], "content_per_sales_unit": content, "content_unit": item["unit"],
         "units_needed": units_needed, "unit_price_eur": unit_price, "comparison_price_eur": comparison,
         "total_eur": total, "status": status, "available_amount": available_amount, "available_date": available_date,

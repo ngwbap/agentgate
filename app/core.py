@@ -347,7 +347,7 @@ def _price_lines(items: list[dict], requested: str) -> list[dict]:
         if cmp.get("value"):
             content = round(cp["value"] / cmp["value"], 3)
         lines.append({
-            "product_id": p["id"], "name": p["name"], "category": p["category"],
+            "product_id": p["id"], "name": p["name"], "category": p["category"], "image_url": p.get("image_url"),
             "quantity": qty, "unit": p["sales_unit"], "unit_price_eur": cp["value"],
             "line_total_eur": round(qty * cp["value"], 2), "tax_rate": (pr.get("tax") or {}).get("taxRate"),
             "content": round(qty * content, 2) if content else None, "content_unit": pr.get("comparisonUnit") or p["content_unit"],

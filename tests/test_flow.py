@@ -462,6 +462,15 @@ def test_built_in_reader_finds_product_allergy_and_wishes():
     assert n["budget_eur"] == 600 and n["other_wishes"] == ["Deliver to the back door"]
 
 
+def test_a_request_without_a_product_adds_to_the_current_order():
+    r = client.post("/api/demo/understand", json={"buyer_id": "hotel-aurora", "message": "my budget is 50 euro"}).json()
+    n = r["need"]
+    assert n["adds_to_current_order"] and n["budget_eur"] == 50
+    assert n["items"][0]["label"] == "" and n["items"][0]["product_terms"] == []      # never "my budget" as a product
+    r = client.post("/api/demo/understand", json={"buyer_id": "hotel-aurora", "message": "24 litres of oat drink"}).json()
+    assert not r["need"]["adds_to_current_order"]
+
+
 def test_right_unit_for_the_product():
     milk = client.post("/api/demo/unit-check", json={"product_terms": ["milk", "maito"]}).json()
     choc = client.post("/api/demo/unit-check", json={"product_terms": ["chocolate", "suklaa"]}).json()
@@ -470,6 +479,16 @@ def test_right_unit_for_the_product():
     r = client.post("/api/demo/understand", json={"buyer_id": "hotel-aurora", "message": "40 kg of milk by Monday"}).json()
     item = r["need"]["items"][0]
     assert item["unit"] == "KG" and item["usual_unit"]["unit"] == "L"      # kept as typed; the page warns, never changes it
+
+
+def test_boxes_fit_the_product():
+    """The tick boxes come from the matching products: 'avoid milk' means nothing for milk, a lot for chocolate."""
+    milk = client.post("/api/demo/unit-check", json={"product_terms": ["milk", "maito"]}).json()["choices"]
+    choc = client.post("/api/demo/unit-check", json={"product_terms": ["chocolate", "suklaa"]}).json()["choices"]
+    assert milk["matched"] and milk["allergens"].get("AM") == milk["matched"]          # every milk contains milk
+    assert 0 < milk["claims"].get("FREE_FROM_LACTOSE", 0) < milk["matched"]          # lactose-free splits them
+    assert 0 < choc["allergens"].get("SH", 0) < choc["matched"]                      # some chocolate has hazelnut
+    assert set(milk["labels"]) == {"finnish", "organic"}
 
 
 def test_delivery_notes_become_wishes_not_product_words():

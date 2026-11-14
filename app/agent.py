@@ -34,7 +34,10 @@ def understand(buyer_id: str, request: str) -> dict:
     usage = need.pop("usage", None)
     catalog = core.store.get_catalog()
     for item in need.get("items", []):
-        item["usual_unit"] = catalog.usual_unit(item["product_terms"])     # e.g. milk -> L, meat -> KG
+        item["usual_unit"] = catalog.usual_unit(item["product_terms"]) if item.get("product_terms") else None   # milk -> L
+    # No product named = an update to the order being made (budget, date, allergy, wish), not a new order.
+    need["adds_to_current_order"] = not any((it.get("label") or "").strip() and it.get("product_terms")
+                                            for it in need.get("items", []))
     core.audit(f"user:{buyer_id}", "request", request)
     return {"need": need, "ai_usage": {"calls": 1 if usage else 0, "usd": usage["usd"] if usage else 0}}
 
