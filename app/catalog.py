@@ -175,8 +175,12 @@ class Catalog:
         return len(self.products)
 
     def usual_unit(self, product_terms: list[str]) -> dict:
-        """How Valio sells this kind of product: by volume (L) or by weight (KG), from the products that match."""
-        found = self.search(product_terms, limit=200)["candidates"]
+        """How Valio sells this kind of product: by volume (L) or by weight (KG), from the products that match.
+
+        Judged on the main product name (the first term) when it matches anything: extra search words can be
+        broad ("kaura" = oats also brings oat bread), which would make oat drink look like a kg product."""
+        main = self.search(product_terms[:1], limit=200)["candidates"] if product_terms else []
+        found = main or self.search(product_terms, limit=200)["candidates"]
         counts = defaultdict(int)
         for p in found:
             if p["content_unit"] in ("L", "KG"):

@@ -54,6 +54,7 @@ RAW = [
     _raw("900004", "Oat drink barista 1 l", "Kaurajuoma barista 1 l", "10402", "ST", 1, volume_l=1,
          claims=["VEGAN", "FREE_FROM_LACTOSE"]),
     _raw("900005", "Red wine 0,75 l", "Punaviini 0,75 l", "60000", "BOT", 1, volume_l=0.75),
+    _raw("900014", "Oat bread 500 g", "Kaurasämpylä 500 g", "40000", "ST", 1, net_g=500),   # "kaura" also means this
     _raw("900011", "Rice wine vinegar 1 l", "Riisiviinietikka 1 l", "30000", "ST", 1, volume_l=1),
 ]
 RELIABILITY = {"900001": 0.99, "900002": 1.0, "900004": 0.97}

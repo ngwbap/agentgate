@@ -471,6 +471,12 @@ def test_a_request_without_a_product_adds_to_the_current_order():
     assert not r["need"]["adds_to_current_order"]
 
 
+def test_usual_unit_follows_the_main_product_not_broad_extra_words():
+    cat = core.store.get_catalog()
+    oat = cat.usual_unit(["oat drink", "kaura"])          # "kaura" (oats) also matches oat bread, sold by weight
+    assert oat["unit"] == "L" and oat["share"] == 1.0
+
+
 def test_right_unit_for_the_product():
     milk = client.post("/api/demo/unit-check", json={"product_terms": ["milk", "maito"]}).json()
     choc = client.post("/api/demo/unit-check", json={"product_terms": ["chocolate", "suklaa"]}).json()
