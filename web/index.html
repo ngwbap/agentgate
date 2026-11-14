@@ -22,7 +22,7 @@
   .crit { margin-top: 12px; padding: 18px 20px; }
   .crit .fields { display: grid; grid-template-columns: 2fr 1.4fr 1fr 1fr; gap: 12px; }
   .crit label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); font-weight: 500; }
-  .crit .groups { display: grid; grid-template-columns: 1fr 1.35fr 1fr; gap: 6px 22px; margin-top: 16px; }
+  .crit .groups { display: grid; grid-template-columns: 1.25fr 1.35fr 0.8fr; gap: 6px 22px; margin-top: 16px; }
   .crit .group > .t { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
   .crit .group > .t .faint { font-weight: 400; }
   .crit .wide { grid-column: 1 / -1; }
@@ -208,22 +208,24 @@ function tick(on, label, handler, n) {
 function choiceLists(it) {
   const ch = it.usual_unit && it.usual_unit.choices, total = ch ? ch.matched : 0;
   const live = total > 0, splits = (n) => n > 0 && n < total;
-  const byCount = (counts) => (a, b) => (counts[b] || 0) - (counts[a] || 0);
-  let claims = live ? Object.keys(CLAIMS).filter(c => splits(ch.claims[c] || 0)).sort(byCount(ch.claims)) : [...MAIN_CLAIMS];
-  let allergens = live ? Object.keys(ALLERGENS).filter(a => splits(ch.allergens[a] || 0)).sort(byCount(ch.allergens)) : [...MAIN_ALLERGENS];
-  let moreClaims = live ? claims.splice(SHOW_CLAIMS) : Object.keys(CLAIMS).filter(c => !claims.includes(c));
-  let moreAllergens = live ? allergens.splice(SHOW_ALLERGENS) : Object.keys(ALLERGENS).filter(a => !allergens.includes(a));
+  // Kept in the usual order (lactose-free first, milk first) so boxes don't jump around between products.
+  let claims = live ? Object.keys(CLAIMS).filter(c => splits(ch.claims[c] || 0)) : Object.keys(CLAIMS);
+  let allergens = live ? Object.keys(ALLERGENS).filter(a => splits(ch.allergens[a] || 0)) : Object.keys(ALLERGENS);
   for (const [c, a, pref] of PAIRS) {      // one box per question
     const cOn = it.must_claims.includes(c), aOn = it.exclude_allergens.includes(a);
-    const hasC = [...claims, ...moreClaims].includes(c), hasA = [...allergens, ...moreAllergens].includes(a);
     let drop;                              // the ticked side wins; else the preferred side, if these products offer it
     if (cOn) drop = "allergen";
     else if (aOn) drop = "claim";
-    else if (pref === "claim") drop = hasC ? "allergen" : "claim";
-    else drop = hasA ? "claim" : "allergen";
-    if (drop === "allergen" && !aOn) { allergens = allergens.filter(x => x !== a); moreAllergens = moreAllergens.filter(x => x !== a); }
-    if (drop === "claim" && !cOn) { claims = claims.filter(x => x !== c); moreClaims = moreClaims.filter(x => x !== c); }
+    else if (pref === "claim") drop = claims.includes(c) ? "allergen" : "claim";
+    else drop = allergens.includes(a) ? "claim" : "allergen";
+    if (drop === "allergen" && !aOn) allergens = allergens.filter(x => x !== a);
+    if (drop === "claim" && !cOn) claims = claims.filter(x => x !== c);
   }
+  // The first few show; the rest wait behind "More options". Before a product is typed, the usual ones show.
+  const split = (list, main, n) => live ? [list.slice(0, n), list.slice(n)] : [list.filter(x => main.includes(x)), list.filter(x => !main.includes(x))];
+  let moreClaims, moreAllergens;
+  [claims, moreClaims] = split(claims, MAIN_CLAIMS, SHOW_CLAIMS);
+  [allergens, moreAllergens] = split(allergens, MAIN_ALLERGENS, SHOW_ALLERGENS);
   const keep = (shown, extra, ticked) => [...new Set([...shown, ...(more ? extra : []), ...ticked])];
   return {
     live, total,
