@@ -154,8 +154,8 @@ RELEVANCE_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "product_id": {"type": "string"},
-                    "match": {"type": "string", "enum": ["exact", "close", "different"]},
-                    "reason": {"type": "string", "description": "Max 12 words"},
+                    "match": {"type": "string", "enum": ["exact", "close", "substitute", "different"]},
+                    "reason": {"type": "string", "description": "Max 12 words. For close and substitute: what the kitchen gives up."},
                 },
                 "required": ["product_id", "match", "reason"],
                 "additionalProperties": False,
@@ -169,27 +169,47 @@ RELEVANCE_SCHEMA = {
 RELEVANCE_SYSTEM = (
     "You check which wholesale products match a professional kitchen's need. "
     "exact = the product the buyer asked for (any brand or pack size). "
-    "close = a reasonable substitute a chef might accept (e.g. different fat %), but not what was asked. "
-    "different = a different kind of product (e.g. sour milk or coffee creamer when milk was asked). "
+    "close = the same product type in a variant the buyer did not ask for (e.g. different fat %, UHT), "
+    "which a chef would usually accept. "
+    "substitute = a different product type that serves the same culinary purpose (e.g. oat drink for milk) and "
+    "still meets every stated requirement; the reason says what the kitchen gives up. "
+    "different = a different kind of product that does not serve the purpose (e.g. sour milk or coffee creamer "
+    "when milk was asked), or one that cannot meet the requirements. "
     "Judge only by product type and the stated requirements."
 )
 
 
-def judge_relevance(item: dict, candidates: list[dict]) -> tuple[dict[str, dict], dict | None]:
-    """{product_id: {match, reason}} for each candidate."""
-    if llm.available() and candidates:
+def judge_relevance(item: dict, candidates: list[dict],
+                    substitute_candidates: list[dict] = ()) -> tuple[dict[str, dict], dict | None]:
+    """{product_id: {match, reason}} for the primary candidates and the substitute ideas, in ONE Claude call.
+
+    substitute_candidates = [{"product": p, "label": ..., "trade_off": ...}] found for the need's substitutes.
+    """
+    everything = list(candidates) + [s["product"] for s in substitute_candidates]
+    if llm.available() and everything:
         lines = "\n".join(f"{c['id']}: {c['name']} | {c['name_fi']}" for c in candidates)
+        if substitute_candidates:
+            lines += "\n\nPossible substitutes (other product types, only useful if the above cannot be delivered):\n"
+            lines += "\n".join(f"{s['product']['id']}: {s['product']['name']} | {s['product']['name_fi']} "
+                               f"[idea: {s['label']}]" for s in substitute_candidates)
         need = (f"Need: {item['label']}; requirements: "
                 f"{', '.join(CLAIM_NAMES.get(c, c) for c in item['must_claims']) or 'none'}; "
                 f"avoid allergens: {', '.join(ALLERGENS.get(a, a) for a in item['exclude_allergens']) or 'none'}")
         try:
             data, usage = llm.ask_json(RELEVANCE_SYSTEM, f"{need}\n\nCandidates:\n{lines}", RELEVANCE_SCHEMA)
-            result = {j["product_id"]: {"match": j["match"], "reason": j["reason"]} for j in data["judgements"]}
+            known = {c["id"] for c in everything}
+            result = {j["product_id"]: {"match": j["match"], "reason": j["reason"]} for j in data["judgements"]
+                      if j["product_id"] in known}
             if result:
                 return result, usage
         except llm.LLMUnavailable:
             pass
     terms = [t.lower() for t in item["product_terms"]]
-    return {c["id"]: {"match": "exact" if any(t in f"{c['name']} {c['name_fi']}".lower() for t in terms) else "close",
-                      "reason": "name matches the request" if any(t in f"{c['name']} {c['name_fi']}".lower() for t in terms)
-                      else "related product"} for c in candidates}, None
+    result = {}
+    for c in candidates:
+        hit = any(t in f"{c['name']} {c['name_fi']}".lower() for t in terms)
+        result[c["id"]] = {"match": "exact" if hit else "close",
+                           "reason": "name matches the request" if hit else "related product"}
+    for s in substitute_candidates:
+        result.setdefault(s["product"]["id"], {"match": "substitute", "reason": s["trade_off"] or f"{s['label']} instead"})
+    return result, None

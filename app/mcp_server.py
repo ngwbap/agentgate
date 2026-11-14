@@ -34,7 +34,8 @@ def get_my_mandate() -> dict:
 @mcp.tool()
 def smart_lookup(request: str) -> dict:
     """Best first step. One sentence (English or Finnish), e.g. 'I need 1,000 L lactose-free milk by Monday'.
-    Returns ranked, live-checked options with evidence and a recommended plan."""
+    Returns ranked, live-checked options with evidence and up to three fulfilment plans
+    (Best / Better / Good) with certainty, fidelity, trade-offs and approval reasons."""
     return _wrap(core.smart_lookup, BUYER_ID, request)
 
 
@@ -57,9 +58,12 @@ def request_quote(items: list[dict], deliver_by: str | None = None) -> dict:
 
 
 @mcp.tool()
-def place_order(quote_id: str, reason: str, is_substitute: bool = False) -> dict:
-    """Order from a quote with a human-readable reason. Above your mandate it waits for human approval."""
-    return _wrap(core.place_order, BUYER_ID, quote_id, reason, is_substitute)
+def place_order(quote_id: str, reason: str, is_substitute: bool = False,
+                declared_risks: list[str] | None = None) -> dict:
+    """Order from a quote with a human-readable reason. Above your mandate it waits for human approval.
+    Pass the chosen plan's approval_needed as declared_risks (and is_substitute if a line is not exact):
+    any declared risk sends the order to a human."""
+    return _wrap(core.place_order, BUYER_ID, quote_id, reason, is_substitute, declared_risks)
 
 
 @mcp.tool()

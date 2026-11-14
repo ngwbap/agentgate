@@ -44,13 +44,18 @@ def discovery():
         "tools": ["get_my_mandate", "smart_lookup", "search_products", "check_availability", "request_quote",
                   "place_order", "get_order_status"],
         "lookup_policy": "Narrow down with static product data first; live price/availability only for the shortlist "
-                         "(typically 2 calls for ~8 products), never for the whole catalog.",
+                         "(typically 2 calls for ~8 products), never for the whole catalog. Substitutes are "
+                         "checked live (2 more calls) only when the requested product cannot be confirmed.",
+        "plans": "smart_lookup returns up to three fulfilment plans (Best / Better / Good), scored "
+                 "0.55 x delivery certainty + 0.45 x match fidelity, price as tie-breaker. Dietary claims and "
+                 "allergen exclusions are hard rules and apply to substitutes too.",
         "rules": {
             "pricing": "fixed Valio price per customer and date, no negotiation",
             "decisions": ["agent_may_order", "needs_human_approval", "blocked"],
             "human_approval_when": ["total above the mandate's auto-approve limit",
                                     "quantity far above the buyer's usual weekly order",
-                                    "supplier order cutoff passed (delivery not guaranteed)", "substitute products"],
+                                    "supplier order cutoff passed (delivery not guaranteed)", "substitute products",
+                                    "any risk the agent declares itself (declared_risks on place_order)"],
             "blocked_when": ["mandate revoked or expired", "total above hard limit", "non-food in a food-only mandate",
                              "lead time beyond the mandate"],
             "every_order_needs": "a human-readable reason",
@@ -80,6 +85,7 @@ class OrderRequest(BaseModel):
     quote_id: str
     reason: str
     is_substitute: bool = False
+    declared_risks: list[str] = []   # anything the agent is unsure about; any entry routes the order to a human
 
 
 @app.get("/api/v1/mandate", tags=["agent"])
@@ -110,7 +116,7 @@ def api_quote(body: QuoteRequest, buyer: dict = Depends(current_buyer)):
 
 @app.post("/api/v1/orders", tags=["agent"])
 def api_order(body: OrderRequest, buyer: dict = Depends(current_buyer)):
-    return core.place_order(buyer["id"], body.quote_id, body.reason, body.is_substitute)
+    return core.place_order(buyer["id"], body.quote_id, body.reason, body.is_substitute, body.declared_risks)
 
 
 @app.get("/api/v1/orders/{order_id}", tags=["agent"])
@@ -174,6 +180,7 @@ class ChatRequest(BaseModel):
 class PlanLine(BaseModel):
     product_id: str
     units: float
+    match: str = "exact"
 
 
 class OrderPlanRequest(BaseModel):
@@ -182,6 +189,7 @@ class OrderPlanRequest(BaseModel):
     deliver_by: str
     reason: str
     is_substitute: bool = False
+    declared_risks: list[str] = []
 
 
 class BuyerRequest(BaseModel):
@@ -203,7 +211,7 @@ def api_demo_lookup(body: ChatRequest):
 def api_order_plan(body: OrderPlanRequest):
     _buyer_or_404(body.buyer_id)
     return agent.order_plan(body.buyer_id, [l.model_dump() for l in body.lines], body.deliver_by, body.reason,
-                            body.is_substitute)
+                            body.is_substitute, body.declared_risks)
 
 
 @app.post("/api/demo/rogue", tags=["demo"])

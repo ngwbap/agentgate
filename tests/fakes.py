@@ -5,7 +5,7 @@ from app.catalog import Catalog, build_product
 
 
 def _raw(pid, name_en, name_fi, category, sales_unit, per_sales, volume_l=None, net_g=None, claims=(), contains=(),
-         labels=(), base_unit="ST"):
+         labels=(), base_unit="ST", may_contain=(), free_from=()):
     each = {"synkkaPackagingType": "BASE_UNIT_OR_EACH"}
     if volume_l:
         each["volume"] = {"unit": "LTR", "value": volume_l}
@@ -22,8 +22,9 @@ def _raw(pid, name_en, name_fi, category, sales_unit, per_sales, volume_l=None, 
             "unitConversions": [each],
             "classifications": [
                 {"type": "ENUM", "name": "nutritionalClaim", "values": [{"id": c} for c in claims]},
-                {"type": "ENUM", "name": "allergen", "values": [{"id": a, "unit": "CONTAINS"} for a in contains]},
-                {"type": "ENUM", "name": "nonAllergen", "values": []},
+                {"type": "ENUM", "name": "allergen", "values": [{"id": a, "unit": "CONTAINS"} for a in contains]
+                                                               + [{"id": a, "unit": "MAY_CONTAIN"} for a in may_contain]},
+                {"type": "ENUM", "name": "nonAllergen", "values": [{"id": a, "unit": "FREE_FROM"} for a in free_from]},
                 {"type": "ENUM", "name": "packagingMarkedLabel", "values": [{"id": l} for l in labels]},
             ],
         },
@@ -42,7 +43,10 @@ RAW = [
          net_g=100, claims=["FREE_FROM_LACTOSE"], contains=["AM"]),
     _raw("900008", "Dark chocolate 70% 100 g", "Tumma suklaa 100 g", "22000", "ST", 1, net_g=100),
     _raw("900009", "Hazelnut chocolate 200 g", "Pähkinäsuklaa 200 g", "22000", "ST", 1, net_g=200, contains=["SH"]),
-    _raw("900010", "Chocolate praline box 250 g", "Konvehtirasia 250 g", "22000", "ST", 1, net_g=250),
+    _raw("900010", "Chocolate praline box 250 g", "Konvehtirasia 250 g", "22000", "ST", 1, net_g=250,
+         contains=["AY"], free_from=["SH", "AM"]),                       # declared free from: verified
+    _raw("900012", "Chocolate cookie 150 g", "Suklaakeksi 150 g", "22000", "ST", 1, net_g=150,
+         contains=["AW"], may_contain=["SH"]),                           # traces: out in strict mode only
     _raw("900004", "Oat drink barista 1 l", "Kaurajuoma barista 1 l", "10402", "ST", 1, volume_l=1,
          claims=["VEGAN", "FREE_FROM_LACTOSE"]),
     _raw("900005", "Red wine 0,75 l", "Punaviini 0,75 l", "60000", "BOT", 1, volume_l=0.75),

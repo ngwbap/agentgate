@@ -198,7 +198,8 @@ def smart_lookup(buyer_id: str, request: str) -> dict:
     plan = first["plan"] if first else {}
     audit(f"agent:{buyer_id}", "smart_lookup",
           f"Lookup '{request[:60]}': {result['api']['products_checked']} of {result['api']['catalog_size']} products "
-          f"checked live in {result['api']['calls']} API calls; plan: {plan.get('type', 'none')} ({plan.get('confidence', '-')})",
+          f"checked live in {result['api']['calls']} API calls; {len(first['plans']) if first else 0} plan(s), "
+          f"best: {plan.get('kind', 'none')} ({plan.get('confidence', '-')})",
           reason=plan.get("why", ""), data={"api": result["api"], "ai_usage": result["ai_usage"]})
     return result
 
@@ -291,7 +292,12 @@ def request_quote(buyer_id: str, items: list[dict], deliver_by: str | None = Non
     return quote
 
 
-def evaluate(buyer: dict, quote: dict, *, is_substitute: bool) -> dict:
+def _clean_risks(declared_risks) -> list[str]:
+    """Risks the agent itself declares (free text). Bounded so an agent cannot flood the approver."""
+    return [str(r).strip()[:300] for r in (declared_risks or []) if str(r).strip()][:10]
+
+
+def evaluate(buyer: dict, quote: dict, *, is_substitute: bool, declared_risks: list[str] | None = None) -> dict:
     """The door's decision: agent may order alone, needs a human, or is blocked. Plain rules, plain reasons."""
     m = buyer["mandate"]
     block, approve = [], []
@@ -320,6 +326,8 @@ def evaluate(buyer: dict, quote: dict, *, is_substitute: bool) -> dict:
         approve.append(f"Total {quote['total_eur']} EUR is above the agent's own limit {m['auto_approve_limit_eur']} EUR.")
     if is_substitute and m["substitutes_need_approval"]:
         approve.append("Contains a substitute product; substitutes need human sign-off.")
+    # An agent can only ADD caution: anything it declares sends the order to a human, never past a block.
+    approve += [f"Agent declared: {r}" for r in _clean_risks(declared_risks)]
     if block:
         return {"decision": "blocked", "reasons": block}
     if approve:
@@ -333,7 +341,9 @@ def _approve_by(quote: dict) -> str | None:
     return min(cutoffs)[:16] if cutoffs else None
 
 
-def place_order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool = False) -> dict:
+def place_order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool = False,
+                declared_risks: list[str] | None = None) -> dict:
+    declared_risks = _clean_risks(declared_risks)
     with _lock:
         buyer = store.buyers[buyer_id]
         check_mandate(buyer)
@@ -346,14 +356,14 @@ def place_order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool =
             raise WholesalerError(f"Quote {quote_id} was already used.")
         if not reason.strip():
             raise WholesalerError("A reason is required so humans can see why the agent ordered.")
-        decision = evaluate(buyer, quote, is_substitute=is_substitute)
-        status = {"agent_may_order": "confirmed", "needs_human_approval": "pending_approval",
+        decision = evaluate(buyer, quote, is_substitute=is_substitute, declared_risks=declared_risks)
+        status ={"agent_may_order": "confirmed", "needs_human_approval": "pending_approval",
                   "blocked": "rejected"}[decision["decision"]]
         order = {
             "order_id": store.next_id("O"), "buyer_id": buyer_id, "buyer_name": buyer["name"],
             "mandate_id": buyer["mandate"]["id"], "quote_id": quote_id, "lines": quote["lines"],
             "total_eur": quote["total_eur"], "deliver_by": quote["deliver_by"], "agent_reason": reason,
-            "is_substitute": is_substitute, "policy": decision, "status": status,
+            "is_substitute": is_substitute, "declared_risks": declared_risks, "policy": decision, "status": status,
             "approve_by": _approve_by(quote) if status == "pending_approval" else None,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "decided_by": "door (automatic)" if status != "pending_approval" else None,

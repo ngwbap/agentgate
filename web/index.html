@@ -37,6 +37,20 @@
   .funnel .n { font-weight:700; } .funnel .arrow { color:var(--muted); }
   .funnel .stage { background:var(--chip); border-radius:6px; padding:2px 6px; }
   .plan { border:2px solid var(--accent); border-radius:10px; padding:10px; margin:10px 0; background:var(--accent-soft); }
+  .plans { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:8px; margin:10px 0 4px; align-items:stretch; }
+  .gbb { border:1px solid var(--line); border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .gbb.best { border:2px solid var(--accent); background:var(--accent-soft); }
+  .gbb .head { display:flex; justify-content:space-between; align-items:baseline; gap:6px; }
+  .gbb .label { font-weight:700; font-size:15px; }
+  .gbb .total { font-weight:700; font-size:16px; white-space:nowrap; }
+  .gbb ul { margin:0; padding-left:16px; font-size:12.5px; }
+  .gbb .foot { margin-top:auto; padding-top:4px; }
+  .meter { display:grid; grid-template-columns:62px 1fr 38px; gap:6px; align-items:center; font-size:12px; }
+  .meter .bar { height:6px; border-radius:99px; background:var(--chip); overflow:hidden; }
+  .meter .bar i { display:block; height:100%; background:var(--accent); border-radius:99px; }
+  .meter .v { text-align:right; font-variant-numeric:tabular-nums; }
+  .sub-note { font-size:12px; color:var(--muted); margin:4px 0; }
+  ul.reasons { margin:4px 0; padding-left:18px; font-size:12px; color:var(--muted); }
   .opt { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin:6px 0; }
   .opt.best { border-color:var(--accent); }
   .opt .top { display:flex; justify-content:space-between; gap:8px; }
@@ -132,12 +146,34 @@ function funnel(r) {
     .concat(f.steps.map(s => `<span class="arrow">→</span><span class="stage" title="${esc(s.step)}"><span class="n">${s.remaining}</span> ${esc(s.step)}</span>`))
     .concat([`<span class="arrow">→</span><span class="stage"><span class="n">${f.judged}</span> judged by AI</span>`,
              `<span class="arrow">→</span><span class="stage"><span class="n">${f.checked_live}</span> checked live</span>`]);
-  return `<div class="funnel">${stages.join("")}</div>`;
+  const ideas = (f.substitute_ideas || []).filter(s => s.candidates);
+  const note = f.substitutes_note ? `<div class="sub-note">↪ Substitutes${ideas.length ? " (" + ideas.map(s => esc(s.label)).join(", ") + ")" : ""}: ${esc(f.substitutes_note)}</div>` : "";
+  return `<div class="funnel">${stages.join("")}</div>${note}`;
+}
+
+function meter(name, v) {
+  const pct = Math.round(v * 100);
+  return `<div class="meter"><span class="muted">${name}</span><span class="bar"><i style="width:${pct}%"></i></span><span class="v">${pct}%</span></div>`;
+}
+
+function planCard(p, i, j, unit) {
+  const conf = { "confirmed": "ok", "partly confirmed": "warn", "not confirmed": "bad" }[p.confidence] || "";
+  return `<div class="gbb ${j === 0 ? "best" : ""}">
+    <div class="head"><span class="label">${j === 0 ? "★ " : ""}${esc(p.label)}</span><span class="total">${eur(p.total_eur)}</span></div>
+    <div><span class="chip ${conf}">${esc(p.confidence)}</span><span class="chip">${esc(p.kind)}</span>
+      <span class="chip">${p.price_per_unit != null ? eur(p.price_per_unit) + "/" + esc(unit) : ""}</span></div>
+    ${meter("Certainty", p.certainty)}${meter("Fidelity", p.fidelity)}
+    <div class="muted" title="0.55 × delivery certainty + 0.45 × match fidelity; price breaks ties">Score ${p.score.toFixed(2)} = 0.55 × ${p.certainty.toFixed(2)} + 0.45 × ${p.fidelity.toFixed(2)}</div>
+    <ul>${p.lines.map(l => `<li>${l.units} × ${esc(l.sales_unit)} ${esc(l.name)} <span class="muted">(${l.content} ${esc(unit)}, ${esc(l.source)}${l.match !== "exact" ? ", " + esc(l.match) : ""}) · ${eur(l.total_eur)}</span></li>`).join("")}</ul>
+    <div class="muted">${esc(p.why)}</div>
+    ${p.trade_offs.length ? `<div class="flags">Trade-offs:<ul>${p.trade_offs.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : `<div class="muted">No trade-offs.</div>`}
+    ${p.approval_needed.length ? `<div class="muted">Agent will declare to the door (→ human approval):<ul>${p.approval_needed.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
+    <div class="foot"><button onclick="orderPlan(${i}, ${j})">Order this plan</button></div></div>`;
 }
 
 function optionCard(o, b) {
   const tags = [];
-  if (b.best === o.product_id) tags.push(`<span class="chip accent">★ Best overall</span>`);
+  if (b.best === o.product_id) tags.push(`<span class="chip accent">★ Top-rated product</span>`);
   if (b.cheapest === o.product_id) tags.push(`<span class="chip">€ Cheapest</span>`);
   if (b.most_reliable === o.product_id) tags.push(`<span class="chip">🚚 Most reliable</span>`);
   if (b.lowest_co2 === o.product_id) tags.push(`<span class="chip">🌱 Lowest CO₂</span>`);
@@ -157,7 +193,10 @@ function optionCard(o, b) {
       <li>Match: ${esc(o.match_reason)}</li>
       ${Object.entries(o.evidence).map(([k, v]) => `<li>${esc(k)}: ${esc(v)}</li>`).join("")}
       <li>Score parts: price ${o.score_parts.price}, reliability ${o.score_parts.reliability}, CO₂ ${o.score_parts.co2} (weights ${esc(JSON.stringify(o.score_parts.weights))})</li>
+      ${o.score_parts.over_order_penalty ? `<li>Over-ordering penalty (whole sales units): −${o.score_parts.over_order_penalty}</li>` : ""}
       ${o.contains_allergens.length ? `<li>Contains: ${esc(o.contains_allergens.join(", "))}</li>` : ""}
+      ${o.may_contain_allergens.length ? `<li>May contain: ${esc(o.may_contain_allergens.join(", "))}</li>` : ""}
+      ${o.free_from_allergens.length ? `<li>Declared free from: ${esc(o.free_from_allergens.join(", "))}</li>` : ""}
     </ul></details></div>`;
 }
 
@@ -171,24 +210,24 @@ function renderLookup(r) {
   const parts = r.results.map((res, i) => {
     const it = res.item;
     const need = `<div>${[`${it.quantity} ${it.unit} ${esc(it.label)}`, ...it.must_claims.map(c => c.toLowerCase().replace(/_/g, " ")),
-      ...it.exclude_allergens.map(a => "no " + a), `by ${esc(r.deliver_by)}`].map(t => `<span class="chip accent">${t}</span>`).join("")}</div>`;
-    const p = res.plan;
-    const plan = `<div class="plan"><b>Recommended plan · ${esc(p.type)} · ${esc(p.confidence)}</b>
-      <ul class="lines">${p.lines.map(l => `<li>${l.units} × ${esc(l.sales_unit)} ${esc(l.name)} (${l.content} ${esc(it.unit)}) · ${eur(l.total_eur)}</li>`).join("")}</ul>
-      <div class="muted">${esc(p.why)}</div>
-      ${p.lines.length ? `<div class="row"><button onclick="orderPlan(${i})">Order this plan</button><span class="muted">The door checks the mandate and decides.</span></div>` : ""}</div>`;
+      ...it.exclude_allergens.map(a => "no " + a), ...(it.strict_allergens ? ["strict allergen mode"] : []), `by ${esc(r.deliver_by)}`].map(t => `<span class="chip accent">${t}</span>`).join("")}</div>`;
+    const plan = res.plans.length
+      ? `<h3>Ways to fulfil this <span class="muted">· ranked by 0.55 × delivery certainty + 0.45 × match fidelity, price breaks ties · the door decides on every order</span></h3>
+         <div class="plans">${res.plans.map((p, j) => planCard(p, i, j, it.unit)).join("")}</div>`
+      : `<div class="plan"><b>No plan</b><div class="muted">${esc(res.plan.why)}</div></div>`;
     const opts = res.options.map(o => optionCard(o, res.badges)).join("");
     const rej = res.rejected.length ? `<details><summary>Not what you asked for (${res.rejected.length})</summary><ul>${res.rejected.map(x => `<li>${esc(x.name)}: ${esc(x.reason)}</li>`).join("")}</ul></details>` : "";
-    return need + funnel(res) + plan + `<h3>Options</h3>` + opts + rej;
+    return need + funnel(res) + plan + `<h3>Products checked live</h3>` + opts + rej;
   });
   $("result").innerHTML = head + parts.join("<hr>");
 }
 
-async function orderPlan(i) {
-  const res = last.results[i], p = res.plan;
+async function orderPlan(i, j) {
+  const res = last.results[i], p = res.plans[j];
   const out = await api("/api/demo/order-plan", { method: "POST", body: JSON.stringify({
-    buyer_id: $("buyer").value, deliver_by: last.deliver_by, reason: p.why,
-    lines: p.lines.map(l => ({ product_id: l.product_id, units: l.units })) }) });
+    buyer_id: $("buyer").value, deliver_by: last.deliver_by, reason: `${p.label} plan (${p.confidence}). ${p.why}`,
+    declared_risks: p.approval_needed,
+    lines: p.lines.map(l => ({ product_id: l.product_id, units: l.units, match: l.match })) }) });
   if (out.quote && out.quote.error) alert(out.quote.error);
   refresh();
 }
@@ -210,7 +249,7 @@ async function refresh() {
       <div class="muted">${esc(o.buyer_name)} · mandate ${esc(o.mandate_id)} · deliver by ${esc(o.deliver_by)}</div>
       <ul class="lines">${o.lines.map(l => `<li>${l.quantity} × ${esc(l.unit)} ${esc(l.name)} · ${eur(l.line_total_eur)} <span class="muted">(${l.stock_source === "supplier" ? "supplier stock" : "Valio stock"})</span></li>`).join("")}</ul>
       <div><b>Agent's reason:</b> ${esc(o.agent_reason)}</div>
-      <div class="muted"><b>Door:</b> ${esc(o.policy.reasons.join(" "))}</div>
+      <div class="muted"><b>Door:</b></div><ul class="reasons">${o.policy.reasons.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
       ${o.status === "pending_approval" ? `
         ${o.approve_by ? `<div class="flags"><b>Approve by ${esc(o.approve_by.replace("T", " "))}</b> to keep the delivery date</div>` : ""}
         <input id="note-${o.order_id}" placeholder="Note (optional)">

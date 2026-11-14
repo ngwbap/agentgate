@@ -23,13 +23,19 @@ def lookup(buyer_id: str, request: str) -> dict:
     return _safe(core.smart_lookup, buyer_id, request)
 
 
-def order_plan(buyer_id: str, lines: list[dict], deliver_by: str, reason: str, is_substitute: bool = False) -> dict:
-    """Quote the chosen plan lines and place the order; the door decides what happens."""
+def order_plan(buyer_id: str, lines: list[dict], deliver_by: str, reason: str, is_substitute: bool = False,
+               declared_risks: list[str] | None = None) -> dict:
+    """Quote the chosen plan lines and place the order; the door decides what happens.
+
+    An honest agent tells the door what it knows: a line that is not exactly what was asked is a
+    substitute, and the plan's own risks (approval_needed) are passed on as declared risks.
+    """
     quote = _safe(core.request_quote, buyer_id,
                   [{"product_id": l["product_id"], "quantity": l["units"]} for l in lines], deliver_by)
     if quote.get("error"):
         return {"quote": quote, "order": None}
-    order = _safe(core.place_order, buyer_id, quote["quote_id"], reason, is_substitute)
+    is_substitute = is_substitute or any(l.get("match", "exact") != "exact" for l in lines)
+    order = _safe(core.place_order, buyer_id, quote["quote_id"], reason, is_substitute, declared_risks or [])
     return {"quote": quote, "order": order}
 
 

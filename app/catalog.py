@@ -44,7 +44,12 @@ CLAIM_NAME_HINTS = {
     "FREE_FROM_GLUTEN": ("gluteeniton", "gluten free", "gluten-free", "glutenfri"),
     "VEGAN": ("vegaani", "vegan"),
 }
-VOLUME_TO_L = {"LTR": 1.0, "MLT": 0.001, "CLT": 0.01, "DLT": 0.1, "MTQ": 1000.0}
+# A claim can be proven by a stronger one: a vegan product has no milk, so no lactose and no egg.
+CLAIM_IMPLIED_BY = {
+    "FREE_FROM_LACTOSE": ("VEGAN",), "LOW_LACTOSE": ("FREE_FROM_LACTOSE", "VEGAN"),
+    "FREE_FROM_EGGS": ("VEGAN",), "VEGETARIAN": ("VEGAN",),
+}
+VOLUME_TO_L ={"LTR": 1.0, "MLT": 0.001, "CLT": 0.01, "DLT": 0.1, "MTQ": 1000.0}
 WEIGHT_TO_KG = {"KGM": 1.0, "GRM": 0.001, "MGM": 0.000001}
 _NAME_SIZE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(ml|cl|dl|l|kg|g)\b", re.I)
 _TOKEN = re.compile(r"[a-zåäöéü0-9]+(?:-[a-zåäöéü0-9]+)*", re.I)
@@ -194,7 +199,7 @@ class Catalog:
         steps.append({"step": "category coherence", "categories_kept": sorted(coherent), "remaining": len(matched)})
 
         for claim in must_claims:
-            matched = {pid for pid in matched if claim in self.products[pid]["claims"]}
+            matched = {pid for pid in matched if claim_proof(self.products[pid], claim)}
             steps.append({"step": f"must be {CLAIM_NAMES.get(claim, claim)}", "remaining": len(matched)})
         for code in exclude_allergens:
             def safe(p):
@@ -202,6 +207,13 @@ class Catalog:
             matched = {pid for pid in matched if safe(self.products[pid])}
             steps.append({"step": f"no {ALLERGENS.get(code, code)}" + (" (incl. may contain)" if strict_allergens else ""),
                           "remaining": len(matched)})
+        if strict_allergens and exclude_allergens:
+            # Strict mode (allergy, school, hospital): a product with no allergen declaration at all
+            # is UNVERIFIED, not safe. Absence of data is not evidence of absence.
+            unverified = {pid for pid in matched if not has_allergen_data(self.products[pid])}
+            matched -= unverified
+            steps.append({"step": f"with allergen data ({len(unverified)} excluded: no allergen data, needs a human check)",
+                          "remaining": len(matched), "excluded_unverified": len(unverified)})
         if content_unit in ("L", "KG"):
             matched = {pid for pid in matched if self.products[pid]["content_unit"] == content_unit}
             steps.append({"step": f"sold by {'volume' if content_unit == 'L' else 'weight'}", "remaining": len(matched)})
@@ -214,6 +226,37 @@ class Catalog:
         ranked = sorted(matched, key=rank)[:limit]
         return {"candidates": [self.products[pid] for pid in ranked], "steps": steps,
                 "catalog_size": len(self.products)}
+
+
+def claim_proof(p: dict, claim: str) -> str | None:
+    """How the product proves a required claim: 'declared', 'implied by <claim>', or None."""
+    if claim in p["claims"]:
+        return "declared"
+    for stronger in CLAIM_IMPLIED_BY.get(claim, ()):
+        if stronger in p["claims"]:
+            return f"implied by the {CLAIM_NAMES.get(stronger, stronger)} claim"
+    return None
+
+
+def has_allergen_data(p: dict) -> bool:
+    """True when the supplier declared anything about allergens (contains, may contain or free from)."""
+    return bool(p["contains"] or p["may_contain"] or p["free_from"])
+
+
+def allergen_evidence(p: dict, exclude_allergens: list[str]) -> list[str]:
+    """Per excluded allergen: how strong the proof is that the product is safe."""
+    out = []
+    for code in exclude_allergens:
+        name = ALLERGENS.get(code, code)
+        if code in p["free_from"]:
+            out.append(f"{name}: declared free from by the supplier")
+        elif code in p["may_contain"]:
+            out.append(f"{name}: MAY CONTAIN traces")
+        elif has_allergen_data(p):
+            out.append(f"{name}: not listed in the supplier's allergen declaration")
+        else:
+            out.append(f"{name}: no allergen data, unverified")
+    return out
 
 
 _catalog: Catalog | None = None

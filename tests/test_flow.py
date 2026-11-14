@@ -9,6 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import agent, core, lookup
+from app import understand as und
+from app.catalog import allergen_evidence, claim_proof
 from app.main import app
 from tests.fakes import FakeValio, make_catalog
 
@@ -49,9 +51,25 @@ def test_lookup_is_honest_when_nothing_is_confirmed():
     assert by_id["900001"]["status"] == "partial"          # only 60 cases x 10 L = 600 L in Valio stock
     assert by_id["900002"]["status"] == "supplier" and by_id["900002"]["cutoff_passed"]
     assert by_id["900002"]["units_needed"] == 50           # 1,000 L / (2 x 10 L)
-    plan = res["plan"]
-    assert plan["confidence"] == "not confirmed" and plan["lines"][0]["product_id"] == "900002"
     assert any("cutoff" in f for f in by_id["900002"]["flags"])
+    assert not any(p["confidence"] == "confirmed" for p in res["plans"])
+
+
+def test_milk_gets_a_best_and_a_better_plan():
+    res = run_lookup(MILK)["results"][0]
+    best, better = res["plans"][0], res["plans"][1]
+    assert res["plan"] == best and [p["label"] for p in res["plans"]] == ["Best", "Better"]
+    # Best: 600 L from Valio's own stock now + the remaining 400 L from the supplier
+    assert best["kind"] == "stock + supplier" and best["confidence"] == "partly confirmed"
+    assert [(l["product_id"], l["units"]) for l in best["lines"]] == [("900001", 60), ("900002", 20)]
+    assert best["total_eur"] == 1400.0 and best["covered"] == 1000
+    assert best["certainty"] == 0.7 and best["fidelity"] == 1.0          # (600 x 1.0 + 400 x 0.25) / 1000
+    assert best["score"] == round(0.55 * 0.7 + 0.45 * 1.0, 3)
+    assert any("cutoff" in r for r in best["approval_needed"])
+    # Better: everything from the supplier in one delivery, nothing confirmed
+    assert better["kind"] == "supplier" and better["confidence"] == "not confirmed"
+    assert [(l["product_id"], l["units"]) for l in better["lines"]] == [("900002", 50)]
+    assert better["certainty"] == 0.25 and better["score"] < best["score"]
 
 
 def test_finnish_request_understood_the_same_way():
@@ -67,22 +85,132 @@ def test_every_option_carries_evidence():
 def test_lookup_survives_a_live_api_outage():
     core.store.valio = FakeValio(fail=True)
     r = run_lookup(MILK)
-    assert r["live_error"] and r["results"][0]["plan"]["type"] == "none"
+    assert r["live_error"] and r["results"][0]["plan"]["kind"] == "none" and r["results"][0]["plans"] == []
 
 
 def test_allergen_exclusion_filters_the_catalog():
     found = core.store.get_catalog().search(["chocolate", "suklaa"], exclude_allergens=["SH", "AM"])
-    assert {p["id"] for p in found["candidates"]} == {"900008", "900010"}
+    assert {p["id"] for p in found["candidates"]} == {"900008", "900010", "900012"}
+
+
+def test_strict_allergen_mode_needs_evidence_not_silence():
+    cat = core.store.get_catalog()
+    found = cat.search(["chocolate", "suklaa"], exclude_allergens=["SH", "AM"], strict_allergens=True)
+    # 900012 may contain hazelnut -> out. 900008 has NO allergen data at all -> unverified, out.
+    assert {p["id"] for p in found["candidates"]} == {"900010"}
+    last = found["steps"][-1]
+    assert last["excluded_unverified"] == 1 and "needs a human check" in last["step"]
+    ev = allergen_evidence(cat.products["900010"], ["SH", "AM"])
+    assert all("declared free from" in e for e in ev)
+    assert "unverified" in allergen_evidence(cat.products["900008"], ["SH"])[0]
+    assert "MAY CONTAIN" in allergen_evidence(cat.products["900012"], ["SH"])[0]
+
+
+def test_a_stronger_claim_proves_a_weaker_one():
+    oat = {"claims": ["VEGAN"]}
+    assert claim_proof(oat, "FREE_FROM_LACTOSE") == "implied by the vegan claim"      # no milk, so no lactose
+    assert claim_proof(oat, "FREE_FROM_GLUTEN") is None                               # never guessed
+    assert claim_proof({"claims": ["FREE_FROM_LACTOSE"]}, "FREE_FROM_LACTOSE") == "declared"
+
+
+def test_shortlist_covers_every_pack_size():
+    big = [{"id": f"B{i}", "sales_unit": "KI", "content_per_sales_unit": 20.0} for i in range(5)]
+    single = [{"id": "S1", "sales_unit": "ST", "content_per_sales_unit": 1.0}]
+    picked = [p["id"] for p in lookup._shortlist(big + single, 1000, 3)]
+    assert picked == ["B0", "S1", "B1"]        # best-fitting size first, but the single carton is not crowded out
+
+
+# ---------------------------------------------------------------- good-better-best plans
+
+def opt(pid, match="exact", status="in_stock", amount=1000, price=10.0, size=10.0, cutoff_passed=False, on_time=True):
+    """A hand-made live-checked option (10 L cases by default)."""
+    return {"product_id": pid, "name": f"Product {pid}", "match": match, "match_reason": "test", "sales_unit": "KI",
+            "content_per_sales_unit": size, "unit_price_eur": price, "status": status,
+            "available_amount": None if status == "supplier" else amount, "on_time": on_time,
+            "cutoff_passed": cutoff_passed}
+
+
+ITEM = {"label": "milk", "quantity": 100, "unit": "L"}
+
+
+def test_confirmed_close_variant_beats_unconfirmed_exact():
+    plans = lookup.build_plans([opt("EXACT", status="supplier", cutoff_passed=True, price=8.0),
+                                opt("CLOSE", match="close", price=12.0)], ITEM)
+    assert [p["label"] for p in plans] == ["Best", "Better"]
+    assert plans[0]["lines"][0]["product_id"] == "CLOSE" and plans[0]["confidence"] == "confirmed"
+    assert plans[0]["score"] == round(0.55 * 1.0 + 0.45 * 0.8, 3)        # 0.91
+    assert plans[1]["lines"][0]["product_id"] == "EXACT" and plans[1]["score"] == round(0.55 * 0.25 + 0.45, 3)
+    assert plans[0]["is_substitute"] and any("close variant" in r for r in plans[0]["approval_needed"])
+
+
+def test_confirmed_exact_wins_and_price_breaks_ties():
+    plans = lookup.build_plans([opt("DEAR", price=12.0), opt("CHEAP", price=9.0), opt("SUP", status="supplier", price=5.0),
+                                opt("OAT", match="substitute", price=4.0)], ITEM)
+    assert plans[0]["lines"][0]["product_id"] == "CHEAP" and plans[0]["score"] == 1.0
+    assert plans[0]["approval_needed"] == [] and plans[0]["trade_offs"] == []
+    assert lookup.has_confirmed_exact(plans)
+    assert {p["kind"] for p in plans} == {"single", "substitute", "supplier"}   # three different kinds of choice
+    assert plans[-1]["kind"] == "substitute"                                    # fidelity 0.5 ranks last
+
+
+def test_split_across_stock_and_honest_partial_plan():
+    split = lookup.build_plans([opt("A", status="partial", amount=6, price=9.0), opt("B", status="partial", amount=7)], ITEM)
+    assert split[0]["kind"] == "split" and split[0]["confidence"] == "confirmed"
+    assert [(l["product_id"], l["units"]) for l in split[0]["lines"]] == [("A", 6), ("B", 4)]   # cheapest first
+    partial = lookup.build_plans([opt("A", status="partial", amount=6)], ITEM)
+    assert partial[0]["kind"] == "partial" and partial[0]["certainty"] == 0.6 and partial[0]["covered"] == 60
+    assert any("Only 60 of 100" in r for r in partial[0]["approval_needed"])
+    assert lookup.build_plans([opt("LATE", on_time=False)], ITEM) == []
+
+
+def with_substitute(monkeypatch, quantity=None):
+    """The offline parser never proposes substitutes; pretend the AI suggested oat drink."""
+    real = und.parse_offline
+    def fake(request, today):
+        need = real(request, today)
+        need["items"][0]["substitutes"] = [{"label": "oat drink", "product_terms": ["oat drink", "kaurajuoma"],
+                                            "trade_off": "different taste, plant-based"}]
+        if quantity:
+            need["items"][0]["quantity"] = quantity
+        return need
+    monkeypatch.setattr(und, "parse_offline", fake)
+
+
+def test_substitutes_are_checked_live_only_when_needed(monkeypatch):
+    with_substitute(monkeypatch)
+    r = run_lookup(MILK)                                   # no confirmed exact plan -> substitutes checked too
+    res = r["results"][0]
+    assert r["api"]["calls"] == 4 and res["funnel"]["substitutes_checked_live"] == 1
+    oat = next(o for o in res["options"] if o["product_id"] == "900004")
+    assert oat["match"] == "substitute" and "lactose-free" in oat["claims"]     # hard rules hold for substitutes
+    r = run_lookup("24 litres of lactose-free milk by Monday")                 # confirmed -> no extra calls
+    assert r["api"]["calls"] == 2 and r["results"][0]["funnel"]["substitutes_checked_live"] == 0
+    assert "not checked live" in r["results"][0]["funnel"]["substitutes_note"]
+
+
+def test_substitute_plan_is_declared_and_needs_a_human(monkeypatch):
+    with_substitute(monkeypatch, quantity=650)             # 600 L milk in stock + 50 L oat drink = confirmed
+    res = run_lookup(MILK)["results"][0]
+    best = res["plans"][0]
+    assert best["kind"] == "substitute" and best["confidence"] == "confirmed" and best["is_substitute"]
+    assert [(l["product_id"], l["match"]) for l in best["lines"]] == [("900001", "exact"), ("900004", "substitute")]
+    order = agent.order_plan("hotel-aurora", best["lines"], "2026-11-16", best["why"],
+                             declared_risks=best["approval_needed"])["order"]
+    reasons = " ".join(order["policy"]["reasons"])
+    assert order["status"] == "pending_approval" and order["is_substitute"]
+    assert "substitutes need human sign-off" in reasons and "Agent declared: Product" not in reasons
+    assert "Agent declared: Oat drink barista 1 l is a substitute" in reasons
 
 
 # ---------------------------------------------------------------- door: quote, mandate, approval
 
 def test_milk_plan_goes_to_the_manager_with_all_reasons_then_confirms():
-    res = run_lookup(MILK)["results"][0]
-    out = agent.order_plan("hotel-aurora", res["plan"]["lines"], "2026-11-16", res["plan"]["why"])
+    best = run_lookup(MILK)["results"][0]["plans"][0]
+    out = agent.order_plan("hotel-aurora", best["lines"], "2026-11-16", best["why"], declared_risks=best["approval_needed"])
     order = out["order"]
-    assert order["status"] == "pending_approval" and order["total_eur"] == 1550.0
+    assert order["status"] == "pending_approval" and order["total_eur"] == 1400.0
     reasons = " ".join(order["policy"]["reasons"])
+    assert "Agent declared:" in reasons                        # the agent's own honesty also routes to a human
     assert "above the agent's own limit" in reasons
     assert "Unusual order" in reasons and "8.3x" in reasons    # 1,000 L vs usual 120 L
     assert "cutoff has passed" in reasons
@@ -92,9 +220,20 @@ def test_milk_plan_goes_to_the_manager_with_all_reasons_then_confirms():
 
 def test_small_normal_order_is_confirmed_by_the_door():
     res = run_lookup("24 litres of oat drink by Monday")["results"][0]
-    assert res["plan"]["confidence"] == "confirmed"
-    order = agent.order_plan("hotel-aurora", res["plan"]["lines"], "2026-11-16", res["plan"]["why"])["order"]
+    plan = res["plan"]
+    assert plan["confidence"] == "confirmed" and plan["label"] == "Best" and plan["approval_needed"] == []
+    order = agent.order_plan("hotel-aurora", plan["lines"], "2026-11-16", plan["why"],
+                             declared_risks=plan["approval_needed"])["order"]
     assert order["status"] == "confirmed" and order["decided_by"] == "door (automatic)"
+
+
+def test_any_declared_risk_sends_a_small_order_to_a_human():
+    q = client.post("/api/v1/quotes", headers=AURORA, json={"items": [{"product_id": "900004", "quantity": 6}]}).json()
+    assert q["policy_preview"]["decision"] == "agent_may_order"
+    o = client.post("/api/v1/orders", headers=AURORA, json={"quote_id": q["quote_id"], "reason": "weekly oat drink",
+                                                           "declared_risks": ["I am not sure this is the barista kind"]}).json()
+    assert o["status"] == "pending_approval"
+    assert "Agent declared: I am not sure this is the barista kind" in o["policy"]["reasons"]
 
 
 def test_misbehaving_agent_is_stopped_every_time():

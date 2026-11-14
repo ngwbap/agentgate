@@ -65,8 +65,21 @@ stock/price/origin claims), guardrails model, **response logic for partial avail
 - `allowedLotSize` is mostly 0.01 → we round count units up to whole units.
 - Unit codes (KI, ST, PRK…) are untranslated; KI ≈ case. **Open mentor question.**
 
-## YOUR TASK (the Fable step): substitution "good-better-best" + exception logic
-Status: **3 small edits already applied** in `understand.py`: `NEED_SCHEMA` items now require `substitutes`
+## DONE (14 Nov, Fable): substitution "good-better-best" + exception logic
+Everything in the design below is built, tested (27 offline tests) and checked in Chrome on real data.
+Found on real data and fixed along the way:
+- The shortlist used to pick only big supplier packs, so nothing was ever confirmed. `lookup._shortlist` now takes
+  turns across pack sizes (16 judged, up to 10 exact + 3 close live). Milk now: Best = 1,000 × 1 L from Valio stock,
+  confirmed, 1,100 €; Better = close variant (confirmed); Good = supplier pack (not confirmed).
+- Many "Stock" products report amount 9999999999 / 666666666. We treat that as Valio stock with no limit reported
+  (confirmed) and say so in the evidence. **Open mentor question: is that right?**
+- Oat drinks carry VEGAN, not FREE_FROM_LACTOSE. `catalog.claim_proof`: a stronger claim proves a weaker one
+  (vegan ⇒ lactose-free, egg-free); the evidence shows "implied by the vegan claim".
+- Demo line for strict allergens + lazy substitutes: "Our school kitchen needs 40 kg of chocolate cookies by Monday.
+  A pupil has a hazelnut allergy." → 3 excluded for no allergen data, 4 API calls, Best = confirmed substitute.
+
+### Original brief (kept for reference)
+Status when written: **3 small edits already applied** in `understand.py`: `NEED_SCHEMA` items now require `substitutes`
 (up to 2 other product types for the same culinary purpose, each `{label, product_terms, trade_off}`), the
 `SYSTEM` prompt explains substitutes + strict_allergens, and `parse_offline` returns `"substitutes": []`.
 **Not yet done:** everything below.

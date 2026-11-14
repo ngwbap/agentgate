@@ -13,13 +13,15 @@ deliverable options**, and lets any agent order them **only within the buyer's m
 2. **Shortlist offline.** It searches Valio's 17,546-product file by name (EN/FI/SV, Finnish compounds), checks **category coherence** (so "milk" means milk drinks, not milk chocolate), applies claims, allergens (incl. "may contain") and unit, and then has Claude judge *exact / close / different*.
 3. **Live check only the shortlist.** It makes **one availability call and one price call** for about 8 products, never the whole catalog, as Valio's API docs ask.
 4. **Rank by rules.** First, can it arrive **in full and on time** (Valio stock vs supplier stock, order cutoff)? Then price per litre/kg, delivery reliability and CO2, using the buyer's priorities as weights.
-5. **Plan.** It recommends a confirmed single product, a split across in-stock products, or an honest "not confirmed, a human decides".
+5. **Good-better-best plans.** It offers up to three ways to fulfil the need (single product, split across stock, close variant, Valio stock plus supplier, substitute), each scored `0.55 × delivery certainty + 0.45 × match fidelity` with price as tie-breaker, and each listing its trade-offs and why a human would have to approve it.
+
+**Exceptions.** Substitutes (e.g. oat drink for milk) are checked live only when the requested product cannot be confirmed (2 more API calls). Dietary claims and allergen exclusions are hard rules that apply to substitutes too. In strict allergen mode (allergy, school, hospital) "may contain" is excluded and a product with **no allergen data is unverified, not safe**: it is dropped and counted in the funnel for a human check.
 
 Every option shows its **evidence**: price API validity, availability timestamp, product-data date and GTIN, and the reliability and CO2 sources.
 
 ## The door (guardrails)
 - **Agent mandate** issued by the buyer: auto-approve limit, hard limit, food only, max lead time, validity, and an instant **Revoke**.
-- **Human approval** above the limit, for **unusual quantities** vs. the buyer's normal week, when a **supplier cutoff has passed**, or for substitutes.
+- **Human approval** above the limit, for **unusual quantities** vs. the buyer's normal week, when a **supplier cutoff has passed**, for substitutes, or for **any risk the agent declares itself** (`declared_risks`). An agent can only add caution, never remove a rule.
 - **Need-to-know.** Agents never see other customers or internal data, and searches are throttled.
 - **Hash-chained audit log**, plus a verifiable receipt for every order.
 - **Open interfaces:** REST/OpenAPI, MCP (with a `smart_lookup` tool), and `/.well-known/agent-interface.json`.
@@ -59,7 +61,7 @@ UI: http://127.0.0.1:8000 · API docs: http://127.0.0.1:8000/docs
 | `app/core.py` | The door: mandate, quotes, orders, approvals, hash-chained audit |
 | `app/main.py` · `app/mcp_server.py` | HTTP API and MCP server |
 | `web/index.html` | Lookup funnel, option cards, approvals, audit trail |
-| `tests/` | 17 offline tests with a synthetic catalog and a fake Valio API |
+| `tests/` | 27 offline tests with a synthetic catalog and a fake Valio API |
 
 ```bash
 venv\Scripts\python.exe -m pytest -q
