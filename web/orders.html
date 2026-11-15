@@ -42,6 +42,8 @@
   .signin .grow { min-width: 220px; }
   .signin .row { flex-wrap: nowrap; }
   .signin input { width: 200px; }
+  .demo-hint { margin-top: 8px; font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .demo-hint code { padding: 1px 6px; border-radius: 4px; background: var(--primary-soft, rgba(37, 99, 235, .1)); }
 </style>
 </head>
 <body>
@@ -120,9 +122,15 @@ function drawSignin() {
     ? `Signed in as ${esc(b.approver)} for ${esc(b.buyer)}. In production this is a notification on your phone. <button class="ghost small" onclick="signOut()">Sign out</button>`
     : `Orders for ${esc(b.buyer)}.`;
   $("signin").innerHTML = signedIn ? "" : `<form class="card signin" onsubmit="signIn(event)"><i class="i i-shield" aria-hidden="true"></i>
-      <div class="grow"><b>Sign in to approve</b><div class="muted">Approving is a human's job. It needs the ${esc(b.approver.toLowerCase())}'s code, which the agents don't have.</div></div>
-      <div class="row"><input type="password" id="code" aria-label="Approver code" placeholder="Approver code" autocomplete="off"><button class="primary">Sign in</button></div></form>`;
+      <div class="grow"><b>Sign in to approve</b><div class="muted">Approving is a human's job. It needs the ${esc(b.approver.toLowerCase())}'s code, which the agents don't have.</div>
+      ${DEMO_CODES[buyerId()] ? `<div class="demo-hint"><span><b>Demo only:</b> the ${esc(b.approver.toLowerCase())}'s code is <code>${esc(DEMO_CODES[buyerId()])}</code></span>
+        <button type="button" class="ghost small" onclick="fillDemoCode()">Fill in</button></div>` : ""}</div>
+      <div class="row"><input type="password" id="code" aria-label="Approver code" placeholder="Approver code" autocomplete="off"><button class="primary" id="signinBtn">Sign in</button></div></form>`;
 }
+// Demo only: the approver codes from data/buyers.json, shown so testers don't have to look them up.
+// The API never hands these out, and agent keys are refused on approver calls whatever this page shows.
+const DEMO_CODES = { "hotel-aurora": "demo-approver-aurora", "cafe-lumi": "demo-approver-lumi" };
+function fillDemoCode() { $("code").value = DEMO_CODES[buyerId()] || ""; $("signinBtn").focus(); }
 async function signIn(ev) {
   ev.preventDefault();
   approverKey = $("code").value.trim();

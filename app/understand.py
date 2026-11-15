@@ -93,14 +93,17 @@ SYSTEM = (
 
 def understand(request: str, today: date) -> dict:
     """Structured need + how it was produced (engine, cost)."""
+    reason = "ANTHROPIC_API_KEY is not set"
     if llm.available():
         try:
             data, usage = llm.ask_json(SYSTEM, f"Today is {today.isoformat()} ({today.strftime('%A')}).\n\nRequest: {request}",
                                        NEED_SCHEMA)
             if isinstance(data.get("items"), list):          # an empty list is a valid answer: no product named
                 return {**data, "engine": usage["model"], "usage": usage}
-        except llm.LLMUnavailable:
-            pass
+            reason = "Claude's answer had no item list"
+        except llm.LLMUnavailable as exc:
+            reason = str(exc)
+    print(f"[understand] offline parser used for {request!r}: {reason}", flush=True)
     return {**parse_offline(request, today), "engine": "offline parser", "usage": None}
 
 
