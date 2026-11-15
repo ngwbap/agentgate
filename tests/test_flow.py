@@ -18,6 +18,8 @@ from tests.fakes import FakeValio, make_catalog
 client = TestClient(app)
 AURORA = {"X-Agent-Key": "demo-key-aurora"}
 LUMI = {"X-Agent-Key": "demo-key-lumi"}
+MGR = {"X-Approver-Key": "demo-approver-aurora"}          # the human approver: the only key that can approve
+MGR_LUMI = {"X-Approver-Key": "demo-approver-lumi"}
 MILK = "I need 1,000 litres of lactose-free milk by Monday. Find an option that meets our requirements based on price and availability."
 
 
@@ -65,7 +67,7 @@ def test_milk_gets_a_best_and_a_better_plan():
     assert [(l["product_id"], l["units"]) for l in best["lines"]] == [("900001", 60), ("900002", 20)]
     assert best["total_eur"] == 1400.0 and best["covered"] == 1000
     assert best["certainty"] == 0.7 and best["fidelity"] == 1.0          # (600 x 1.0 + 400 x 0.25) / 1000
-    assert best["score"] == round(0.55 * 0.7 + 0.45 * 1.0, 3)
+    assert best["score"] == round(0.40 * 0.7 + 0.35 * 1.0 + 0.25 * best["rating"], 3)   # certainty, match, your criteria
     assert any("cutoff" in r for r in best["approval_needed"])
     # Better: everything from the supplier in one delivery, nothing confirmed
     assert better["kind"] == "supplier" and better["confidence"] == "not confirmed"
@@ -139,15 +141,15 @@ def test_confirmed_close_variant_beats_unconfirmed_exact():
                                 opt("CLOSE", match="close", price=12.0)], ITEM)
     assert [p["label"] for p in plans] == ["Best", "Better"]
     assert plans[0]["lines"][0]["product_id"] == "CLOSE" and plans[0]["confidence"] == "confirmed"
-    assert plans[0]["score"] == round(0.55 * 1.0 + 0.45 * 0.8, 3)        # 0.91
-    assert plans[1]["lines"][0]["product_id"] == "EXACT" and plans[1]["score"] == round(0.55 * 0.25 + 0.45, 3)
+    assert plans[0]["score"] == round(0.40 * 1.0 + 0.35 * 0.8, 3)        # hand-made options carry no stars
+    assert plans[1]["lines"][0]["product_id"] == "EXACT" and plans[1]["score"] == round(0.40 * 0.25 + 0.35, 3)
     assert plans[0]["is_substitute"] and any("close variant" in r for r in plans[0]["approval_needed"])
 
 
 def test_confirmed_exact_wins_and_price_breaks_ties():
     plans = lookup.build_plans([opt("DEAR", price=12.0), opt("CHEAP", price=9.0), opt("SUP", status="supplier", price=5.0),
                                 opt("OAT", match="substitute", price=4.0)], ITEM)
-    assert plans[0]["lines"][0]["product_id"] == "CHEAP" and plans[0]["score"] == 1.0
+    assert plans[0]["lines"][0]["product_id"] == "CHEAP" and plans[0]["score"] == 0.75
     assert plans[0]["approval_needed"] == [] and plans[0]["trade_offs"] == []
     assert lookup.has_confirmed_exact(plans)
     assert {p["kind"] for p in plans} == {"single", "substitute", "supplier"}   # three different kinds of choice
@@ -238,12 +240,12 @@ def test_milk_plan_goes_to_the_manager_with_all_reasons_then_confirms():
     assert "above the agent's own limit" in reasons
     assert "Unusual order" in reasons and "8.3x" in reasons    # 1,000 L vs usual 120 L
     assert "cutoff has passed" in reasons
-    done = client.post(f"/api/human/orders/{order['order_id']}/decision", json={"approve": True, "approver": "Kitchen manager"}).json()
+    done = client.post(f"/api/human/orders/{order['order_id']}/decision", headers=MGR, json={"approve": True, "approver": "Kitchen manager"}).json()
     assert done["status"] == "confirmed" and done["receipt"]
 
 
 def allow_small_orders(buyer="hotel-aurora"):
-    client.post(f"/api/human/mandates/{buyer}/settings", json={"by": "Kitchen manager", "always_ask": False})
+    client.post(f"/api/human/mandates/{buyer}/settings", headers=MGR if buyer == "hotel-aurora" else MGR_LUMI, json={"by": "Kitchen manager", "always_ask": False})
 
 
 def test_by_default_a_human_confirms_every_order():
@@ -265,7 +267,7 @@ def test_small_normal_order_is_confirmed_by_the_door_when_the_buyer_allows_it():
 
 
 def test_settings_are_validated():
-    res = client.post("/api/human/mandates/hotel-aurora/settings",
+    res = client.post("/api/human/mandates/hotel-aurora/settings", headers=MGR,
                       json={"by": "Kitchen manager", "auto_approve_limit_eur": 20000})
     assert res.status_code == 400 and "above the hard limit" in res.json()["error"]
 
@@ -314,7 +316,7 @@ def test_quote_preview_matches_what_the_order_will_say(monkeypatch):
 def test_approver_can_approve_with_changed_amounts():
     best = run_lookup(MILK)["results"][0]["plans"][0]
     order = agent.order_plan("hotel-aurora", best["lines"], "2026-11-16", best["why"])["order"]
-    done = client.post(f"/api/human/orders/{order['order_id']}/decision", json={
+    done = client.post(f"/api/human/orders/{order['order_id']}/decision", headers=MGR, json={
         "approve": True, "approver": "Kitchen manager", "changes": [{"product_id": "900001", "quantity": 30}]}).json()
     assert done["status"] == "confirmed" and done["total_eur"] == 390.0 and done["original_total_eur"] == 1400.0
     assert len(done["lines"]) == 1 and done["changed_by"] == "Kitchen manager" and done["receipt"]
@@ -324,7 +326,7 @@ def test_approver_can_approve_with_changed_amounts():
 def test_a_change_can_not_break_a_hard_rule():
     best = run_lookup(MILK)["results"][0]["plans"][0]
     order = agent.order_plan("hotel-aurora", best["lines"], "2026-11-16", best["why"])["order"]
-    res = client.post(f"/api/human/orders/{order['order_id']}/decision", json={
+    res = client.post(f"/api/human/orders/{order['order_id']}/decision", headers=MGR, json={
         "approve": True, "approver": "Kitchen manager", "changes": [{"product_id": "900002", "quantity": 400}]})
     assert res.status_code == 400 and "hard limit" in res.json()["error"]       # 12,400 EUR > 10,000 EUR
     assert core.store.orders[order["order_id"]]["status"] == "pending_approval"
@@ -333,20 +335,20 @@ def test_a_change_can_not_break_a_hard_rule():
 def test_buyer_can_withdraw_a_waiting_order():
     q = client.post("/api/v1/quotes", headers=AURORA, json={"items": [{"product_id": "900004", "quantity": 6}]}).json()
     o = client.post("/api/v1/orders", headers=AURORA, json={"quote_id": q["quote_id"], "reason": "weekly oat drink"}).json()
-    done = client.post(f"/api/human/orders/{o['order_id']}/cancel", json={"by": "Kitchen manager"}).json()
+    done = client.post(f"/api/human/orders/{o['order_id']}/cancel", headers=MGR, json={"by": "Kitchen manager"}).json()
     assert done["status"] == "cancelled"
-    again = client.post(f"/api/human/orders/{o['order_id']}/decision", json={"approve": True, "approver": "x"})
+    again = client.post(f"/api/human/orders/{o['order_id']}/decision", headers=MGR, json={"approve": True, "approver": "x"})
     assert again.status_code == 400
 
 
 def test_pausing_one_agent_leaves_the_others_working():
-    client.post("/api/human/agents/hotel-aurora/own-agent/pause", json={"by": "Kitchen manager"})
+    client.post("/api/human/agents/hotel-aurora/own-agent/pause", headers=MGR, json={"by": "Kitchen manager"})
     res = client.get("/api/v1/products?q=milk", headers=AURORA)
     assert res.status_code == 403 and "paused" in res.json()["error"]
     assert "error" not in agent.lookup("hotel-aurora", "24 litres of oat drink by Monday")     # Valio's assistant still works
-    client.post("/api/human/agents/hotel-aurora/valio-assistant/pause", json={"by": "Kitchen manager"})
+    client.post("/api/human/agents/hotel-aurora/valio-assistant/pause", headers=MGR, json={"by": "Kitchen manager"})
     assert "paused" in agent.lookup("hotel-aurora", "24 litres of oat drink by Monday")["error"]
-    client.post("/api/human/agents/hotel-aurora/own-agent/resume", json={"by": "Kitchen manager"})
+    client.post("/api/human/agents/hotel-aurora/own-agent/resume", headers=MGR, json={"by": "Kitchen manager"})
     assert client.get("/api/v1/products?q=milk", headers=AURORA).status_code == 200
 
 
@@ -538,11 +540,11 @@ def test_substitute_needs_approval_even_when_cheap():
 
 def test_revoked_mandate_blocks_agent_instantly():
     assert client.get("/api/v1/products?q=milk", headers=AURORA).status_code == 200
-    client.post("/api/human/mandates/hotel-aurora/revoke", json={"by": "Kitchen manager"})
+    client.post("/api/human/mandates/hotel-aurora/revoke", headers=MGR, json={"by": "Kitchen manager"})
     res = client.post("/api/v1/lookup", headers=AURORA, json={"request": MILK})
     assert res.status_code == 403 and "revoked" in res.json()["error"]
     assert client.get("/api/v1/products?q=milk", headers=LUMI).status_code == 200   # other buyers unaffected
-    client.post("/api/human/mandates/hotel-aurora/reinstate", json={"by": "Kitchen manager"})
+    client.post("/api/human/mandates/hotel-aurora/reinstate", headers=MGR, json={"by": "Kitchen manager"})
     assert client.get("/api/v1/products?q=milk", headers=AURORA).status_code == 200
 
 
@@ -564,7 +566,7 @@ def test_audit_log_is_tamper_evident():
 
 
 def test_auth_is_required_and_quotes_are_buyer_scoped():
-    assert client.get("/api/v1/products?q=milk").status_code == 422
+    assert client.get("/api/v1/products?q=milk").status_code == 401            # no key: unauthorised, not a form error
     assert client.get("/api/v1/products?q=milk", headers={"X-Agent-Key": "nope"}).status_code == 401
     q = client.post("/api/v1/quotes", headers=AURORA, json={"items": [{"product_id": "900007", "quantity": 12}]}).json()
     assert client.post("/api/v1/orders", headers=LUMI, json={"quote_id": q["quote_id"], "reason": "x"}).status_code == 400
@@ -573,3 +575,168 @@ def test_auth_is_required_and_quotes_are_buyer_scoped():
 def test_discovery_file_describes_the_door():
     d = client.get("/.well-known/agent-interface.json").json()
     assert d["auth"]["header"] == "X-Agent-Key" and "smart_lookup" in d["tools"]
+
+
+# ---------------------------------------------------------------- approving is a human's job
+
+def pending_milk_order():
+    """12 L of whole milk: small and normal, but by default a human confirms every order."""
+    q = client.post("/api/v1/quotes", headers=AURORA, json={"items": [{"product_id": "900007", "quantity": 12}]}).json()
+    return client.post("/api/v1/orders", headers=AURORA, json={"quote_id": q["quote_id"], "reason": "weekly milk"}).json()
+
+
+def test_an_agent_can_not_approve_its_own_order():
+    order = pending_milk_order()
+    url, yes = f"/api/human/orders/{order['order_id']}/decision", {"approve": True, "approver": "Kitchen manager"}
+    assert order["status"] == "pending_approval"
+    assert client.post(url, json=yes).status_code == 401                                           # no key at all
+    assert client.post(url, json=yes, headers=AURORA).status_code == 401                           # the agent's own key
+    assert client.post(url, json=yes, headers={"X-Approver-Key": "demo-key-aurora"}).status_code == 401   # agent key as approver key
+    assert client.post(url, json=yes, headers=MGR_LUMI).status_code == 400                         # another buyer's approver
+    assert core.store.orders[order["order_id"]]["status"] == "pending_approval"                    # still waiting
+    done = client.post(url, json={"approve": True, "approver": "the agent, honest"}, headers=MGR).json()
+    assert done["status"] == "confirmed" and done["decided_by"] == "Kitchen manager"               # the name comes from the key
+
+
+def test_only_the_buyers_own_approver_changes_its_agents_and_limits():
+    assert client.post("/api/human/mandates/hotel-aurora/settings", json={"always_ask": False}).status_code == 401
+    assert client.post("/api/human/mandates/hotel-aurora/settings", headers=MGR_LUMI, json={"always_ask": False}).status_code == 403
+    assert client.post("/api/human/agents/hotel-aurora/own-agent/pause", headers=AURORA, json={}).status_code == 401
+    assert client.get("/api/human/pending").status_code == 401
+    pending_milk_order()
+    assert len(client.get("/api/human/pending", headers=MGR).json()) == 1
+    assert client.get("/api/human/pending", headers=MGR_LUMI).json() == []                         # only your own orders
+    assert client.get("/api/human/session", headers=MGR).json()["approver"] == "Kitchen manager"
+
+
+def test_keys_can_be_stored_as_hashes():
+    import hashlib
+    core.store.buyers["hotel-aurora"]["agents"][1] = {"id": "own-agent", "name": "Hashed", "paused": False,
+                                                     "key_sha256": hashlib.sha256(b"secret-in-production").hexdigest()}
+    assert client.get("/api/v1/mandate", headers={"X-Agent-Key": "secret-in-production"}).status_code == 200
+    assert client.get("/api/v1/mandate", headers=AURORA).status_code == 401
+
+
+# ---------------------------------------------------------------- signed quotes and receipts
+
+def test_quotes_and_receipts_are_signed_by_the_door():
+    q = client.post("/api/v1/quotes", headers=AURORA, json={"items": [{"product_id": "900007", "quantity": 12}]}).json()
+    signed = q["signed"]
+    assert signed["alg"] == "Ed25519" and signed["payload"]["total_eur"] == q["total_eur"]
+    assert signed["payload"]["lines"][0]["stock_source"] == "valio_stock"                # the stock claim is signed too
+    assert client.post("/api/v1/verify", json=signed).json() == {"valid": True, "key_id": signed["key_id"], "type": "quote"}
+    forged = {**signed, "payload": {**signed["payload"], "total_eur": 1.0}}
+    assert client.post("/api/v1/verify", json=forged).json()["valid"] is False
+    key = client.get("/.well-known/jwks.json").json()["keys"][0]
+    assert key["kty"] == "OKP" and key["crv"] == "Ed25519" and key["kid"] == signed["key_id"]
+    order = client.post("/api/v1/orders", headers=AURORA, json={"quote_id": q["quote_id"], "reason": "weekly milk"}).json()
+    assert "receipt_signed" not in order                                                 # nothing is agreed until a human says yes
+    done = client.post(f"/api/human/orders/{order['order_id']}/decision", headers=MGR, json={"approve": True}).json()
+    receipt = done["receipt_signed"]
+    assert receipt["payload"]["decided_by"] == "Kitchen manager" and receipt["payload"]["receipt"] == done["receipt"]
+    assert client.post("/api/v1/verify", json=receipt).json()["type"] == "receipt"
+
+
+# ---------------------------------------------------------------- state survives a restart
+
+def test_orders_and_the_audit_log_survive_a_restart(tmp_path):
+    core.store.enable_persistence(tmp_path / "state.json")
+    try:
+        order = pending_milk_order()
+        client.post("/api/human/mandates/hotel-aurora/settings", headers=MGR, json={"auto_approve_limit_eur": 250})
+        restarted = core.Store()
+        restarted.enable_persistence(tmp_path / "state.json")
+        assert restarted.orders[order["order_id"]]["status"] == "pending_approval"
+        assert restarted.buyers["hotel-aurora"]["mandate"]["auto_approve_limit_eur"] == 250
+        assert restarted.next_id("O") not in restarted.orders                           # ids carry on, never reused
+        saved, core.store.audit = core.store.audit, restarted.audit
+        assert core.verify_audit()["ok"] and len(restarted.audit) == len(saved)        # the chain still verifies
+    finally:
+        core.store.persist_path = None
+
+
+# ---------------------------------------------------------------- clear answers for requests that can't work
+
+def test_a_past_delivery_date_is_said_plainly():
+    res = client.post("/api/v1/quotes", headers=AURORA, json={"items": [{"product_id": "900007", "quantity": 12}],
+                                                               "deliver_by": "2026-11-13"})
+    assert res.status_code == 400 and "already passed" in res.json()["error"]
+    need = {"items": [{"label": "milk", "product_terms": ["milk"], "quantity": 10, "unit": "L"}], "deliver_by": "2026-11-13"}
+    out = agent.lookup("hotel-aurora", "milk", need)
+    assert "Fri 13 Nov 2026 has already passed" in out["error"]
+    assert core.store.valio.stats["calls"] == 0                                         # said before any live call
+
+
+def test_an_unknown_product_is_said_plainly():
+    res = run_lookup("5 kg of unicorn steaks by Monday")["results"][0]
+    assert res["plans"] == [] and "no product matching “unicorn steaks”" in res["plan"]["why"]
+    assert core.store.valio.stats["calls"] == 0
+
+
+# ---------------------------------------------------------------- a named brand or pack size is honoured
+
+def milk_need(**extra):
+    return {"items": [{"label": "lactose-free milk", "product_terms": ["milk", "maito"], "quantity": 1000, "unit": "L",
+                       "must_claims": ["FREE_FROM_LACTOSE"], **extra}], "deliver_by": "2026-11-16"}
+
+
+def test_another_brand_is_a_close_variant_never_exact():
+    other = core.smart_lookup("hotel-aurora", "milk", milk_need(brand="Arla"))["results"][0]
+    lines = [l for p in other["plans"] for l in p["lines"]]
+    assert lines and all(l["match"] == "close" and l["match_reason"] == "another brand, not Arla" for l in lines)
+    assert all(p["is_substitute"] and p["approval_needed"] for p in other["plans"])      # so a human signs it off
+    assert other["funnel"]["named"] == {"brand": "Arla", "pack_size": None, "matching": 0}
+    same = core.smart_lookup("hotel-aurora", "milk", milk_need(brand="testbrand"))["results"][0]
+    assert all(l["match"] == "exact" for p in same["plans"] for l in p["lines"])
+
+
+def test_another_pack_size_is_a_close_variant():
+    res = core.smart_lookup("hotel-aurora", "milk", milk_need(pack_size=1))["results"][0]
+    by_id = {o["product_id"]: o for o in res["options"]}
+    assert by_id["900001"]["match"] == "exact"                                           # "... milk drink 1 l"
+    assert by_id["900002"]["match"] == "close" and by_id["900002"]["match_reason"] == "10 l pack, not 1 l"
+    assert lookup._name_sizes({"name": "Arla Portion milk 100x2 cl lactose free", "name_fi": ""}, "L") == [0.02]
+    assert lookup._name_sizes({"name": "Butter 500 g, 82 %", "name_fi": ""}, "KG") == [0.5]
+
+
+# ---------------------------------------------------------------- one ranking on screen
+
+def test_the_buyers_criteria_count_in_the_plan_score():
+    cheap, dear = opt("CHEAP", price=9.0), opt("DEAR", match="close", price=30.0)
+    sup = opt("SUP", status="supplier", price=9.0)
+    for o, rating in ((cheap, 1.0), (dear, 0.3), (sup, 1.0)):                           # stars on price, as rank() gives them
+        o.update(ratings={"price": {"name": "Price", "stars": lookup.stars(rating), "part": rating, "why": "test"}},
+                 rating=rating, criteria=["price"])
+    plans = lookup.build_plans([dear, sup], ITEM)
+    # A confirmed close variant at 3.3x the price no longer beats the exact product from the supplier.
+    assert plans[0]["lines"][0]["product_id"] == "SUP" and plans[0]["score"] == round(0.40 * 0.6 + 0.35 + 0.25, 3)
+    assert plans[1]["score"] == round(0.40 + 0.35 * 0.8 + 0.25 * 0.3, 3)
+    assert lookup.build_plans([cheap, dear, sup], ITEM)[0]["lines"][0]["product_id"] == "CHEAP"   # confirmed, exact, cheapest
+
+
+def test_the_star_badge_never_contradicts_best():
+    plans = [{"label": "Best", "certainty": 1.0, "fidelity": 1.0, "confidence": "confirmed", "over_budget": False,
+              "rating": 0.75, "rating_stars": 4.0, "criteria": ["price"], "trade_offs": [],
+              "ratings": {"price": {"name": "Price", "stars": 4.0}}},
+             {"label": "Better", "certainty": 0.25, "fidelity": 1.0, "confidence": "not confirmed", "over_budget": False,
+              "rating": 1.0, "rating_stars": 5.0, "criteria": ["price"], "trade_offs": [],
+              "ratings": {"price": {"name": "Price", "stars": 5.0}}}]
+    lookup.mark_highest_rated(plans)
+    assert plans[1]["highest_rated_label"] == "More stars, but less certain" and plans[0]["highest_rated_label"] is None
+    plans[0]["rating"] = 1.0
+    lookup.mark_highest_rated(plans)
+    assert plans[0]["highest_rated_label"] == "Highest rated"
+
+
+# ---------------------------------------------------------------- the same question gets the same answer
+
+def test_the_same_question_is_answered_from_the_cache(monkeypatch):
+    import hashlib, json
+    from app import config as cfg, llm
+    schema, system, user = {"type": "object"}, "system text", "user text"
+    fingerprint = hashlib.sha256(json.dumps([cfg.CLAUDE_MODEL, cfg.CLAUDE_EFFORT, system, user, schema], sort_keys=True).encode()).hexdigest()
+    monkeypatch.setattr(llm, "_cache", {fingerprint: {"data": {"answer": 42}, "model": "claude-test"}})
+    data, usage = llm.ask_json(system, user, schema)                                     # no API key, no network: still answers
+    assert data == {"answer": 42} and usage["cached"] and usage["usd"] == 0.0
+    with pytest.raises(llm.LLMUnavailable):
+        llm.ask_json(system, "another question", schema)                                 # a new question needs the real API

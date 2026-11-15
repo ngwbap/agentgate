@@ -14,7 +14,7 @@ The door - not the agent - enforces:
 from __future__ import annotations
 
 import hashlib
-import itertools
+import hmac
 import json
 import os
 import threading
@@ -22,7 +22,7 @@ import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from . import config
+from . import config, signing
 from .catalog import get_catalog, public_view
 from .valio_api import ValioApiError, client as default_valio
 
@@ -52,25 +52,63 @@ def _sha(obj) -> str:
 
 
 class Store:
+    persist_path = None         # set by enable_persistence(); None = memory only (tests, the separate MCP process)
+
     def __init__(self) -> None:
         self.catalog = None     # injected in tests; otherwise loaded lazily from data/valio
         self.valio = default_valio
         self.reset()
 
     def reset(self) -> None:
-        raw = json.loads((config.ROOT / "data" / "buyers.json").read_text(encoding="utf-8"))
+        raw = json.loads(config.BUYERS_FILE.read_text(encoding="utf-8"))
         self.buyers = {b["id"]: json.loads(json.dumps(b)) for b in raw["buyers"]}
         self.quotes: dict[str, dict] = {}
         self.orders: dict[str, dict] = {}
         self.audit: list[dict] = []
         self.search_times: dict[str, list[float]] = {}
-        self._ids = itertools.count(1)
+        self._next = 1
+        if self.persist_path and self.persist_path.exists():
+            self.persist_path.unlink()
 
     def get_catalog(self):
         return self.catalog or get_catalog()
 
     def next_id(self, prefix: str) -> str:
-        return f"{prefix}-{next(self._ids):04d}"
+        n, self._next = self._next, self._next + 1
+        return f"{prefix}-{n:04d}"
+
+    # Orders, quotes, the audit log and mandate changes are written to one file after every change,
+    # so a restart loses nothing. (A real deployment would use a database; the shape stays the same.)
+    def enable_persistence(self, path) -> None:
+        self.persist_path = path
+        if not path.exists():
+            return
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        self.quotes, self.orders = saved.get("quotes", {}), saved.get("orders", {})
+        self.audit, self._next = saved.get("audit", []), int(saved.get("next_id", 1))
+        for buyer_id, state in (saved.get("buyers") or {}).items():
+            buyer = self.buyers.get(buyer_id)
+            if not buyer:
+                continue
+            buyer["mandate"].update(state.get("mandate", {}))
+            for a in buyer.get("agents", []):
+                a["paused"] = state.get("paused", {}).get(a["id"], a["paused"])
+
+    def save(self) -> None:
+        if not self.persist_path:
+            return
+        state = {"next_id": self._next, "quotes": self.quotes, "orders": self.orders, "audit": self.audit,
+                 "buyers": {bid: {"mandate": b["mandate"], "paused": {a["id"]: a["paused"] for a in b.get("agents", [])}}
+                            for bid, b in self.buyers.items()}}
+        try:
+            tmp = self.persist_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state, default=str), encoding="utf-8")
+            tmp.replace(self.persist_path)
+        except OSError:
+            pass                # a full disk must not stop the door from answering
 
 
 store = Store()
@@ -87,6 +125,7 @@ def audit(actor: str, action: str, summary: str, *, reason: str = "", data: dict
     }
     entry["hash"] = _sha(entry)
     store.audit.append(entry)
+    store.save()                # every change to orders, quotes or mandates ends in an audit entry
 
 
 def verify_audit() -> dict:
@@ -101,13 +140,30 @@ def verify_audit() -> dict:
 
 # ---------------------------------------------------------------- buyers & mandates
 
+def _key_matches(key: str | None, plain: str | None, hashed: str | None) -> bool:
+    """A key is stored either in plain text (demo file) or as its SHA-256 hash (production file)."""
+    if not key:
+        return False
+    if plain and hmac.compare_digest(plain, key):
+        return True
+    return bool(hashed) and hmac.compare_digest(hashed, hashlib.sha256(key.encode()).hexdigest())
+
+
 def agent_by_key(agent_key: str) -> tuple[dict, dict]:
     """(buyer, agent) for an agent key. Each key belongs to one agent acting for one buyer."""
     for b in store.buyers.values():
         for a in b.get("agents", []):
-            if a["key"] == agent_key:
+            if _key_matches(agent_key, a.get("key"), a.get("key_sha256")):
                 return b, a
     raise WholesalerError("Unknown agent key.")
+
+
+def approver_by_key(approver_key: str) -> dict:
+    """The buyer whose human approver holds this key. Agent keys never match: approving is a human's job."""
+    for b in store.buyers.values():
+        if _key_matches(approver_key, b.get("approver_key"), b.get("approver_key_sha256")):
+            return b
+    raise WholesalerError("Unknown approver key.")
 
 
 def buyer_by_key(agent_key: str) -> dict:
@@ -294,6 +350,8 @@ def request_quote(buyer_id: str, items: list[dict], deliver_by: str | None = Non
     buyer = store.buyers[buyer_id]
     check_mandate(buyer)
     requested = (_parse_date(deliver_by) or today() + timedelta(days=2)).isoformat()
+    if requested < today().isoformat():
+        raise WholesalerError(f"The delivery date {requested} has already passed. Ask for {today().isoformat()} or later.")
     try:
         lines = _price_lines(items, requested)
     except WholesalerError as exc:
@@ -307,6 +365,10 @@ def request_quote(buyer_id: str, items: list[dict], deliver_by: str | None = Non
         "pricing": "fixed Valio price for this customer and date, no negotiation",
     }
     quote["policy_preview"] = evaluate(buyer, quote, is_substitute=False)
+    # Signed offer: the agent can prove later what price, stock source and date Valio's door promised.
+    quote["signed"] = signing.sign({"type": "quote", "issuer": "Valio Aimo AgentGate",
+                                    **{k: quote[k] for k in ("quote_id", "buyer_id", "total_eur", "currency", "deliver_by", "valid_until")},
+                                    "lines": _signed_lines(lines)})
     store.quotes[quote["quote_id"]] = quote
     audit(f"agent:{buyer_id}", "request_quote",
           f"Quote {quote['quote_id']} for {total} EUR; door says: {quote['policy_preview']['decision']}",
@@ -480,7 +542,7 @@ def place_order(buyer_id: str, quote_id: str, reason: str, is_substitute: bool =
         }
         quote["used"] = True
         if status == "confirmed":
-            order["receipt"] = _receipt(order)
+            _stamp(order)
         store.orders[order["order_id"]] = order
     audit(f"agent:{buyer_id}", "place_order", f"Order {order['order_id']} {order['total_eur']} EUR -> {status}",
           reason=reason, data={"order_id": order["order_id"], "decision": decision})
@@ -498,21 +560,42 @@ def _receipt(order: dict) -> str:
     return _sha({k: order[k] for k in ("order_id", "buyer_id", "mandate_id", "lines", "total_eur", "deliver_by", "decided_by")})
 
 
+def _signed_lines(lines: list[dict]) -> list[dict]:
+    keys = ("product_id", "name", "quantity", "unit", "unit_price_eur", "line_total_eur", "stock_source", "available_date")
+    return [{k: l.get(k) for k in keys} for l in lines]
+
+
+def _stamp(order: dict) -> None:
+    """A confirmed order gets a receipt: a fingerprint of the order, plus the door's signature over what was agreed."""
+    order["receipt"] = _receipt(order)
+    order["receipt_signed"] = signing.sign({
+        "type": "receipt", "issuer": "Valio Aimo AgentGate", "receipt": order["receipt"],
+        **{k: order[k] for k in ("order_id", "buyer_id", "mandate_id", "quote_id", "total_eur", "deliver_by", "status", "decided_by")},
+        "lines": _signed_lines(order["lines"])})
+
+
+def verify_signed(signed: dict) -> dict:
+    """Check a signed quote or receipt that this door issued."""
+    payload, signature = signed.get("payload"), signed.get("signature")
+    ok = isinstance(payload, dict) and isinstance(signature, str) and signing.verify(payload, signature)
+    return {"valid": ok, "key_id": signing.key_id(), "type": payload.get("type") if ok else None}
+
+
 # ---------------------------------------------------------------- human side
 
 def orders_for(buyer_id: str) -> list[dict]:
     return [o for o in reversed(store.orders.values()) if o["buyer_id"] == buyer_id]
 
 
-def pending_orders() -> list[dict]:
-    return [o for o in store.orders.values() if o["status"] == "pending_approval"]
+def pending_orders(buyer_id: str | None = None) -> list[dict]:
+    return [o for o in store.orders.values() if o["status"] == "pending_approval" and buyer_id in (None, o["buyer_id"])]
 
 
-def cancel_order(order_id: str, by: str) -> dict:
-    """The buyer withdraws an order that is still waiting for approval."""
+def cancel_order(order_id: str, by: str, buyer_id: str | None = None) -> dict:
+    """The buyer withdraws an order that is still waiting for approval. buyer_id: only this buyer's orders."""
     with _lock:
         order = store.orders.get(order_id)
-        if not order:
+        if not order or buyer_id not in (None, order["buyer_id"]):
             raise WholesalerError(f"No order {order_id}.")
         if order["status"] != "pending_approval":
             raise WholesalerError(f"Order {order_id} is already {order['status'].replace('_', ' ')}.")
@@ -521,12 +604,14 @@ def cancel_order(order_id: str, by: str) -> dict:
     return order
 
 
-def decide(order_id: str, approve: bool, approver: str, note: str = "", changes: list[dict] | None = None) -> dict:
+def decide(order_id: str, approve: bool, approver: str, note: str = "", changes: list[dict] | None = None,
+           buyer_id: str | None = None) -> dict:
     """Approve or reject. changes = [{product_id, quantity}] approves a changed order: it is re-priced live,
-    and Valio's hard rules still apply (a human can accept a risk, never break a block)."""
+    and Valio's hard rules still apply (a human can accept a risk, never break a block).
+    buyer_id: the approver's own buyer; an approver can only decide that buyer's orders."""
     with _lock:
         order = store.orders.get(order_id)
-        if not order:
+        if not order or buyer_id not in (None, order["buyer_id"]):
             raise WholesalerError(f"No order {order_id}.")
         if order["status"] != "pending_approval":
             raise WholesalerError(f"Order {order_id} is already {order['status']}.")
@@ -546,7 +631,7 @@ def decide(order_id: str, approve: bool, approver: str, note: str = "", changes:
         order["decided_by"] = approver
         order["decision_note"] = note
         if approve:
-            order["receipt"] = _receipt(order)
+            _stamp(order)
     changed_text = (f" with changes ({order['original_total_eur']} -> {order['total_eur']} EUR)"
                     if approve and changes is not None else "")
     audit(f"human:{approver}", "approve" if approve else "reject",

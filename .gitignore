@@ -5,3 +5,6 @@ __pycache__/
 .claude/
 venv/
 data/valio/
+data/state.json
+data/door_key.pem
+data/llm_cache.json

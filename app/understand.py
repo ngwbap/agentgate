@@ -28,6 +28,11 @@ NEED_SCHEMA = {
                                       "description": "Words for the product itself in English, Finnish and Swedish (e.g. milk, maito, maitojuoma, mjölk). No attributes like lactose-free."},
                     "quantity": {"type": "number"},
                     "unit": {"type": "string", "enum": UNITS},
+                    "brand": {"type": ["string", "null"],
+                              "description": "Brand the buyer named (e.g. Arla, Valio, Oatly), exactly as written; null if none"},
+                    "pack_size": {"type": ["number", "null"],
+                                  "description": "Size of ONE pack the buyer asked for, in `unit` (e.g. '1 l cartons' -> 1 "
+                                                 "with unit L, '500 g packs' -> 0.5 with unit KG); null if no pack size was named"},
                     "must_claims": {"type": "array", "items": {"type": "string", "enum": list(CLAIM_NAMES)}},
                     "exclude_allergens": {"type": "array", "items": {"type": "string", "enum": list(ALLERGENS)}},
                     "strict_allergens": {"type": "boolean", "description": "True when 'may contain' traces must also be excluded (e.g. allergy, school or hospital kitchen)"},
@@ -47,7 +52,7 @@ NEED_SCHEMA = {
                         },
                     },
                 },
-                "required": ["label", "product_terms", "quantity", "unit", "must_claims",
+                "required": ["label", "product_terms", "quantity", "unit", "brand", "pack_size", "must_claims",
                              "exclude_allergens", "strict_allergens", "preferred_labels", "substitutes"],
                 "additionalProperties": False,
             },
@@ -71,6 +76,9 @@ SYSTEM = (
     "including common Finnish compound forms (e.g. maito, maitojuoma). Put dietary needs in must_claims and allergens "
     "to avoid in exclude_allergens (GS1 codes). Convert relative dates to YYYY-MM-DD using today's date. "
     "Default unit: L for liquids, KG for foods sold by weight, PCS otherwise. Do not invent requirements. "
+    "If the buyer names a brand, put it in brand (not in label or product_terms). If the buyer names the size of "
+    "one pack (e.g. '1 l cartons', '10 l boxes'), put it in pack_size in the same unit as quantity; the total "
+    "amount is never a pack size. "
     "substitutes are other product types for the same culinary purpose (not other brands or fat levels of the same "
     "product); dietary and allergen requirements still apply to them, so never suggest one that cannot meet them. "
     "Set strict_allergens for allergies and for school, daycare or hospital kitchens. "
@@ -203,7 +211,7 @@ def parse_offline(request: str, today: date) -> dict:
         # never each English word alone ("chocolate" alone would bring every chocolate bar).
         "items": [{"label": product, "product_terms": list(dict.fromkeys([product, *[w for w in words if w in _FI_EN]])) if product else [],
                    "quantity": quantity if product else 0,
-                   "unit": unit, "must_claims": claims, "exclude_allergens": exclude,
+                   "unit": unit, "brand": None, "pack_size": None, "must_claims": claims, "exclude_allergens": exclude,
                    "strict_allergens": any(w in text for w in ("allergy", "allergic", "school", "hospital", "daycare",
                                                                 "koulu", "sairaala", "päiväkoti", "allergia")),
                    "preferred_labels": [], "substitutes": []}],

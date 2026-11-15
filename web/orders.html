@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Valio Aimo orders</title>
-<link rel="stylesheet" href="/shared.css?v=5">
+<link rel="stylesheet" href="/shared.css?v=6">
 <style>
   #who { margin-bottom: 4px; }
   /* Each order is a card with a coloured left edge for its status: amber while it waits for a person. */
@@ -36,6 +36,12 @@
   .switch input:checked + span::after { transform: translateX(20px); }
   .switch input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
   @media (max-width: 560px) { .actions .row { width: 100%; } .actions .row button { flex: 1; } }
+  /* Approving is a human's job: the approver signs in with a code the agents don't have. */
+  .signin { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 16px 0; border-left: 4px solid var(--primary); }
+  .signin > .i { font-size: 28px; color: var(--primary); }
+  .signin .grow { min-width: 220px; }
+  .signin .row { flex-wrap: nowrap; }
+  .signin input { width: 200px; }
 </style>
 </head>
 <body>
@@ -58,6 +64,7 @@
 <div class="wrap narrow">
   <h1 id="title">Waiting for approval</h1>
   <div class="muted" id="who"></div>
+  <div id="signin"></div>
   <div class="stats" id="stats"></div>
   <div id="msg"></div>
   <div id="view"></div>
@@ -83,15 +90,51 @@ const TAG_ICON = { money: "euro", quantity: "package", delivery: "truck", substi
 const ic = (name) => `<i class="i i-${name}" aria-hidden="true"></i>`;
 
 let tab = "waiting", buyers = [], orders = [], editingOrder = null, busy = false;
+let approverKey = null, signedIn = false;     // the approver's code, kept in this browser after one sign-in
 const buyerId = () => $("buyer").value;
 const buyer = () => buyers.find(b => b.buyer_id === buyerId());
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  // Approver calls carry the approver's code. The door refuses them without it, whatever this page does.
+  const key = path.startsWith("/api/human/") && approverKey ? { "X-Approver-Key": approverKey } : {};
+  const r = await fetch(path, { headers: { "Content-Type": "application/json", ...key }, ...opts });
   const body = await r.json();
   if (!r.ok) throw new Error(body.error || body.detail || r.statusText);
   return body;
 }
+
+// ------------------------------------------------------------------ approver sign-in
+const keyName = () => "agentgate-approver:" + buyerId();
+const stored = (set) => { try { if (set === undefined) return localStorage.getItem(keyName());
+  set === null ? localStorage.removeItem(keyName()) : localStorage.setItem(keyName(), set); } catch (e) { /* private window */ } return null; };
+const off = () => signedIn ? "" : "disabled title=\"Sign in as the approver first\"";
+async function checkSession() {
+  approverKey = stored(); signedIn = false;
+  if (approverKey) { try { signedIn = (await api("/api/human/session")).buyer_id === buyerId(); } catch (e) { /* old or wrong code */ } }
+  if (!signedIn) approverKey = null;
+  drawSignin(); if (tab === "settings") drawSettings(); else draw();
+}
+function drawSignin() {
+  const b = buyer(); if (!b) return;
+  $("who").innerHTML = signedIn
+    ? `Signed in as ${esc(b.approver)} for ${esc(b.buyer)}. In production this is a notification on your phone. <button class="ghost small" onclick="signOut()">Sign out</button>`
+    : `Orders for ${esc(b.buyer)}.`;
+  $("signin").innerHTML = signedIn ? "" : `<form class="card signin" onsubmit="signIn(event)"><i class="i i-shield" aria-hidden="true"></i>
+      <div class="grow"><b>Sign in to approve</b><div class="muted">Approving is a human's job. It needs the ${esc(b.approver.toLowerCase())}'s code, which the agents don't have.</div></div>
+      <div class="row"><input type="password" id="code" aria-label="Approver code" placeholder="Approver code" autocomplete="off"><button class="primary">Sign in</button></div></form>`;
+}
+async function signIn(ev) {
+  ev.preventDefault();
+  approverKey = $("code").value.trim();
+  try {
+    if (!approverKey) throw new Error("Type the approver code.");
+    const s = await api("/api/human/session");
+    if (s.buyer_id !== buyerId()) throw new Error(`That code belongs to ${s.buyer}. Pick that customer at the top first.`);
+    stored(approverKey); signedIn = true; flash(`Signed in as ${s.approver}.`);
+  } catch (e) { approverKey = null; signedIn = false; flash(e.message === "Unknown approver key." ? "That code isn't right." : e.message, "bad"); }
+  drawSignin(); if (tab === "settings") drawSettings(); else draw();
+}
+function signOut() { stored(null); approverKey = null; signedIn = false; editingOrder = null; drawSignin(); if (tab === "settings") drawSettings(); else draw(); }
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 function flash(text, cls = "ok") { $("msg").innerHTML = `<div class="banner ${cls}" style="margin-bottom:12px">${esc(text)}</div>`; setTimeout(() => $("msg").innerHTML = "", 5000); }
 
@@ -113,17 +156,17 @@ function orderCard(o) {
   let foot = "";
   if (waiting && editing) {
     foot = `<div class="actions"><span class="muted">Change the amounts. The new total is priced live and still checked against your rules.</span>
-      <div class="row"><button onclick="editingOrder=null;draw()">Cancel</button><button class="primary" onclick="approveChanged('${o.order_id}')">Approve with changes</button></div></div>`;
+      <div class="row"><button onclick="editingOrder=null;draw()">Cancel</button><button class="primary" ${off()} onclick="approveChanged('${o.order_id}')">Approve with changes</button></div></div>`;
   } else if (waiting) {
     foot = `${notesHtml(o)}<div class="muted" style="margin-top:6px">Why it needs you</div><div class="row" style="margin-top:4px">${tagsHtml(o)}</div>
       <details class="why"><summary>Full reasons</summary><ul>${o.policy.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
         <div style="margin-top:6px"><b>Agent's reason:</b> ${esc(o.agent_reason)}</div></details>
       <div class="actions">
         <span style="font-size:14px;color:var(--warn)">${o.approve_by ? `${ic("clock")} Approve by ${esc(o.approve_by.replace("T", " "))} to keep the delivery date` : ""}</span>
-        <div class="row"><button class="small ghost" onclick="withdraw('${o.order_id}')">Withdraw</button>
-          <button onclick="decide('${o.order_id}', false)">Reject</button>
-          <button onclick="editingOrder='${o.order_id}';draw()">Change</button>
-          <button class="primary" onclick="decide('${o.order_id}', true)">Approve</button></div>
+        <div class="row"><button class="small ghost" ${off()} onclick="withdraw('${o.order_id}')">Withdraw</button>
+          <button ${off()} onclick="decide('${o.order_id}', false)">Reject</button>
+          <button ${off()} onclick="editingOrder='${o.order_id}';draw()">Change</button>
+          <button class="primary" ${off()} onclick="decide('${o.order_id}', true)">Approve</button></div>
       </div>`;
   } else {
     const by = o.status === "confirmed" && o.decided_by === "door (automatic)" ? "Ordered by the agent within your rules" :
@@ -185,11 +228,11 @@ function drawSettings() {
     </div>
     <div class="faint" style="margin-top:12px">Food only · substitutes always need approval · over ${m.unusual_order_factor}× your usual week needs approval
       (${Object.values(m.usual_weekly || {}).map(u => `${u.quantity} ${u.unit} ${u.name}`).join(", ")})</div>
-    <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="primary" onclick="saveSettings()">Save</button></div></div>
+    <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="primary" ${off()} onclick="saveSettings()">Save</button></div></div>
     <h2>Connected agents</h2>
     <div class="card">${m.agents.map(a => `<div class="agent"><div><b>${esc(a.name)}</b>
         <div class="faint">${a.paused ? "Paused: every request is refused" : "Active"}</div></div>
-      <button class="${a.paused ? "primary" : "danger"} small" onclick="togglePause('${a.id}', ${!a.paused})">${a.paused ? "Resume" : "Pause"}</button></div>`).join("")}
+      <button class="${a.paused ? "primary" : "danger"} small" ${off()} onclick="togglePause('${a.id}', ${!a.paused})">${a.paused ? "Resume" : "Pause"}</button></div>`).join("")}
       <div class="faint" style="margin-top:8px">Pausing one agent stops it at Valio's door at once. Your other agents keep working.</div></div>`;
 }
 async function saveSettings() {
@@ -222,7 +265,6 @@ async function load() {
   try {
     orders = await api(`/api/demo/orders?buyer_id=${buyerId()}`);
     const b = buyer();
-    $("who").textContent = b ? `You approve as ${b.approver} for ${b.buyer}. In production this is a notification on your phone.` : "";
     if (tab === "waiting" || tab === "done") { if (!editingOrder && !document.activeElement?.matches("input")) draw(); else $("nWaiting").textContent = orders.filter(o => o.status === "pending_approval").length; }
     if (tab === "history") await drawHistory();
   } catch (e) { flash(e.message, "bad"); }
@@ -243,7 +285,7 @@ function setTab(name) {
   $("title").textContent = TITLES[tab];
   if (tab === "settings") { $("stats").innerHTML = ""; if (buyer()) drawSettings(); } else { if (tab === "history") $("view").innerHTML = ""; draw(); load(); }
 }
-function onBuyer() { const b = buyer(); $("buyLink").href = `/?buyer=${buyerId()}`; $("avatar").textContent = b ? initials(b.approver) : ""; }
+function onBuyer() { const b = buyer(); $("buyLink").href = `/?buyer=${buyerId()}`; $("avatar").textContent = b ? initials(b.approver) : ""; checkSession(); }
 document.querySelectorAll(".side [data-tab]").forEach(b => b.onclick = () => {
   history.replaceState(null, "", `/orders?buyer=${buyerId()}#${b.dataset.tab}`); setTab(b.dataset.tab); });
 window.addEventListener("hashchange", () => setTab(location.hash.slice(1)));

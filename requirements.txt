@@ -5,3 +5,4 @@ mcp
 pytest
 httpx
 anthropic
+cryptography

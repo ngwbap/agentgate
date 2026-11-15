@@ -5,6 +5,7 @@ Every decision about limits, ranking and approval is made by plain, testable rul
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 
@@ -20,7 +21,43 @@ PRICES = {
 
 _client = None
 _lock = threading.Lock()
-usage_totals = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "usd": 0.0}
+usage_totals = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "usd": 0.0, "cached_answers": 0}
+
+# The same question gets the same answer. Language models can word an answer differently each time, and a
+# buyer who asks twice must not get two different "Best" plans. Answers are kept by a fingerprint of the exact
+# question (model, instructions, text, expected shape), in memory and in a small file, so a repeat costs
+# nothing and takes no time. The prompt that reads a request contains today's date, so it renews daily.
+CACHE_MAX = 400
+_cache: dict[str, dict] | None = None
+
+
+def _cache_load() -> dict[str, dict]:
+    global _cache
+    if _cache is None:
+        _cache = {}
+        if config.PERSIST and config.LLM_CACHE_FILE.exists():
+            try:
+                _cache = json.loads(config.LLM_CACHE_FILE.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                _cache = {}
+    return _cache
+
+
+def _cache_save() -> None:
+    if not config.PERSIST:
+        return
+    try:
+        tmp = config.LLM_CACHE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_cache), encoding="utf-8")
+        tmp.replace(config.LLM_CACHE_FILE)
+    except OSError:
+        pass
+
+
+def clear_cache() -> None:
+    global _cache
+    _cache = {}
+    _cache_save()
 
 
 class LLMUnavailable(Exception):
@@ -53,6 +90,13 @@ def ask_json(system: str, user: str, schema: dict, *, model: str | None = None,
         raise LLMUnavailable(f"Claude library can't load: {exc}") from exc
     model = model or config.CLAUDE_MODEL
     effort = effort or config.CLAUDE_EFFORT
+    fingerprint = hashlib.sha256(json.dumps([model, effort, system, user, schema], sort_keys=True).encode()).hexdigest()
+    with _lock:
+        hit = _cache_load().get(fingerprint)
+        if hit:
+            usage_totals["cached_answers"] += 1
+            return json.loads(json.dumps(hit["data"])), {"model": hit["model"], "input_tokens": 0, "output_tokens": 0,
+                                                         "usd": 0.0, "cached": True}
     client = _get_client()
     params = dict(
         model=model, max_tokens=max_tokens, system=system,
@@ -83,4 +127,10 @@ def ask_json(system: str, user: str, schema: dict, *, model: str | None = None,
         usage_totals["input_tokens"] += resp.usage.input_tokens
         usage_totals["output_tokens"] += resp.usage.output_tokens
         usage_totals["usd"] = round(usage_totals["usd"] + usd, 5)
+        cache = _cache_load()
+        if len(cache) >= CACHE_MAX:                      # drop the oldest answers
+            for old in list(cache)[: CACHE_MAX // 4]:
+                del cache[old]
+        cache[fingerprint] = {"data": data, "model": resp.model}
+        _cache_save()
     return data, info

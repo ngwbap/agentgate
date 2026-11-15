@@ -31,3 +31,13 @@ USER_AGENT = "AgentGate/0.2 (Junction 2026 team STEEL BALL)"
 
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
 CLAUDE_EFFORT = os.environ.get("CLAUDE_EFFORT", "low")
+
+# Buyers, mandates and keys. The file in the repo holds demo keys only; point BUYERS_FILE at a private file
+# in production (keys can be stored there as SHA-256 hashes: "key_sha256" instead of "key").
+BUYERS_FILE = Path(os.environ.get("BUYERS_FILE") or ROOT / "data" / "buyers.json")
+
+# Files the running server writes (all git-ignored). Off under pytest, so tests never touch the disk.
+PERSIST = "pytest" not in __import__("sys").modules and os.environ.get("AGENTGATE_PERSIST", "1") != "0"
+STATE_FILE = ROOT / "data" / "state.json"          # orders, quotes, audit log, mandate changes: survive a restart
+DOOR_KEY_FILE = ROOT / "data" / "door_key.pem"     # the door's signing key (Ed25519) for quotes and receipts
+LLM_CACHE_FILE = ROOT / "data" / "llm_cache.json"  # same request -> same AI answer, instantly and at no cost

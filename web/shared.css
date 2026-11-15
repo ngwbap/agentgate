@@ -88,7 +88,9 @@ button, .btn { display: inline-flex; align-items: center; justify-content: cente
   white-space: nowrap; font-size: 14px; font-weight: 500; transition: background-color .15s, border-color .15s, box-shadow .15s; }
 button:hover, .btn:hover { background: var(--wash); }
 button:active, .btn:active { background: var(--tile); }
-button:disabled { opacity: .5; cursor: progress; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.pill.named { background: var(--primary-soft); border-color: transparent; color: var(--primary-ink); padding-right: 2px; }
+.pill.named button { min-height: 24px; padding: 2px 4px; }
 button.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
 button.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 button.ghost { border-color: transparent; background: transparent; color: var(--primary-ink); padding: 6px 10px; }

@@ -50,7 +50,7 @@ date and GTIN, how each required claim is proven, and the allergen declaration.
 ### Good-better-best plans
 We rank **fulfilment plans, not single products**, because the real answer is often a combination.
 
-`score = 0.55 × delivery certainty + 0.45 × match fidelity` · price breaks ties · the numbers are shown in the UI.
+`score = 0.40 × delivery certainty + 0.35 × match fidelity + 0.25 × the buyer's own criteria` (price by default) · total price breaks ties · the numbers are shown in the UI. One ranking: "Best" is the top score, and a plan with more stars but less certainty says so on its badge.
 
 | Delivery certainty (per line) | | Match fidelity (per line) | |
 |---|---|---|---|
@@ -134,7 +134,7 @@ The door returns one of: `agent_may_order` · `needs_human_approval` · `blocked
 
 ## Out of scope
 A full marketplace · replacing the webshop with a chatbot · price negotiation · writing real orders
-into Valio's systems (orders live in memory) · delivery-failure handling.
+into Valio's systems (orders are saved to a local file, not to Valio's order system) · delivery-failure handling.
 
 ## Open questions for Valio's mentors
 - Supplier ("Terminal") products show a cutoff that has passed but a delivery date that is still on time. Which one wins?

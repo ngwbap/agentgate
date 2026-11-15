@@ -56,7 +56,10 @@ AgentGate turns **one sentence into a few trusted, deliverable options**, and le
 
 - **Trust & Audit**
   - **Hash-chained audit log**, verifiable at `/api/human/audit/verify`
-  - A verifiable receipt for every order
+  - **Signed quotes and receipts** (Ed25519): an agent can prove what price, stock source and date the door promised, and who approved. Public key in JWKS format at `/.well-known/jwks.json`; check any signed object at `POST /api/v1/verify`
+  - **Approving is human-only**: approver endpoints need a separate `X-Approver-Key`. An agent key is refused there, so an agent can never approve its own order
+  - Orders, quotes and the audit log are saved to disk and survive a restart
+  - The same request gives the same answer: the AI's language step is cached
 
 ## 🔐 Demo Accounts
 
@@ -68,6 +71,15 @@ Two demo buyers live in `data/buyers.json`, each with two agents:
 | Hotel Aurora Helsinki (kitchen) | Hotel's own AI agent | `demo-key-aurora` |
 | Cafe Lumi | Valio Aimo assistant | `demo-assistant-lumi` |
 | Cafe Lumi | Cafe's own AI agent | `demo-key-lumi` |
+
+Approving needs the approver's code. On the Orders page, sign in once per browser:
+
+| Buyer | Approver | Approver code (`X-Approver-Key`) |
+|---|---|---|
+| Hotel Aurora Helsinki (kitchen) | Kitchen manager | `demo-approver-aurora` |
+| Cafe Lumi | Owner | `demo-approver-lumi` |
+
+These are demo keys. For real use, point `BUYERS_FILE` at a private file; keys can be stored there as SHA-256 hashes (`key_sha256`, `approver_key_sha256`) instead of plain text.
 
 ## 🛠️ Technology Stack
 
@@ -132,7 +144,7 @@ venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
 
 The application will be available at:
 - **Buying Assistant**: http://127.0.0.1:8000 (type or speak a request, check what was understood, pick a way, send it from the order sheet)
-- **Orders & Approvals**: http://127.0.0.1:8000/orders (approve, change, reject; jump to `#done`, `#history` or `#settings`)
+- **Orders & Approvals**: http://127.0.0.1:8000/orders (sign in with the approver code, then approve, change, reject; jump to `#done`, `#history` or `#settings`)
 - **Demo Tools for the Pitch**: http://127.0.0.1:8000/?demo (misbehaving agent, reset, the funnel and plan scores)
 - **Interactive API Docs**: http://127.0.0.1:8000/docs
 
@@ -150,7 +162,7 @@ On Windows (cmd): `set WHOLESALER_AGENT_KEY=demo-key-aurora && python -m app.mcp
 venv\Scripts\python.exe -m pytest -q
 ```
 
-53 offline tests, no API keys needed.
+65 offline tests, no API keys needed.
 
 ## 📁 Project Structure
 
@@ -193,17 +205,22 @@ agentgate/
 
 1. **Understand.** Claude turns an English or Finnish request into a structured need (product, quantity, unit, deadline, dietary claims, allergens). An offline parser takes over if the AI is unavailable.
 2. **Shortlist offline.** Search Valio's 17,546-product file by name (EN/FI/SV, Finnish compounds), check **category coherence** (so "milk" means milk drinks, not milk chocolate), apply claims, allergens (incl. "may contain") and unit, then let Claude judge *exact / close / different*.
-3. **Live check only the shortlist.** **One availability call and one price call** for about 8 products, never the whole catalog, as Valio's API docs ask.
+3. **Live check only the shortlist.** **One availability call and one price call** for about 15 products, never the whole catalog, as Valio's API docs ask.
 4. **Rank by rules.** First: can it arrive **in full and on time** (Valio stock vs supplier stock, order cutoff)? Then price per litre/kg, delivery reliability and CO2, weighted by the buyer's priorities.
 5. **Good-better-best plans.** Up to three plans (single product, split across stock, close variant, Valio stock plus supplier, substitute).
 
 ### Plan Scoring
 
 ```
-score = 0.55 × delivery certainty + 0.45 × match fidelity     (price breaks ties)
+score = 0.40 × delivery certainty + 0.35 × match fidelity + 0.25 × your criteria
+        (your criteria = price by default; reliability and carbon footprint if you tick them)
 ```
 
-Each plan lists its trade-offs and why a human would have to approve it.
+Each plan lists its trade-offs and why a human would have to approve it. "Best" is the top score. If another plan
+has more stars on your criteria, its badge says the catch in the same breath ("More stars, but less certain").
+
+A brand or pack size you name is honoured: "Arla, 1 l cartons" puts Arla 1 l products first; other brands and sizes
+are offered only as close variants, which need approval.
 
 ### Substitutes
 
@@ -218,12 +235,16 @@ Each plan lists its trade-offs and why a human would have to approve it.
 3. Hard-rule violations are **rejected**
 4. Anything above the auto-approve limit, unusual vs. the usual week, past a supplier cutoff, a substitute, or with `declared_risks` goes to **human approval**
 5. Otherwise (and only if "always ask me" is off) it is **auto-approved**
-6. Every step is written to the hash-chained audit log, and the order gets a receipt
+6. Every step is written to the hash-chained audit log, and a confirmed order gets a signed receipt
+7. A human approves with the approver key; the name on the approval comes from that key, not from the request
 
 ## 🔌 API Endpoints
 
 ### Discovery
 - `GET /.well-known/agent-interface.json` - Machine-readable interface description
+- `GET /.well-known/jwks.json` - The door's public signing key (JWKS)
+- `POST /api/v1/verify` - Check a signed quote or receipt
+- `GET /openapi.json` - OpenAPI 3.1, with the two key types declared as security schemes
 
 ### Agent Endpoints
 - `GET /api/v1/mandate` - Get the agent's mandate
@@ -235,6 +256,8 @@ Each plan lists its trade-offs and why a human would have to approve it.
 - `GET /api/v1/orders/{order_id}` - Get order status
 
 ### Human (Approver) Endpoints
+All need the header `X-Approver-Key` (except verifying the audit chain). An approver sees and decides only their own buyer's orders.
+- `GET /api/human/session` - Who this approver key belongs to
 - `GET /api/human/pending` - Orders waiting for approval
 - `POST /api/human/orders/{order_id}/decision` - Approve, approve with changes, or reject
 - `POST /api/human/orders/{order_id}/cancel` - Cancel an order
@@ -265,7 +288,8 @@ Check that `VALIO_API_KEY` is set in `.env` and that `scripts/download_data.py` 
 Without `ANTHROPIC_API_KEY` the offline parser is used. Add the key for Claude-based understanding and relevance judging.
 
 ### Reset the demo
-Open http://127.0.0.1:8000/?demo and press reset, or call `POST /api/demo/reset`.
+Open http://127.0.0.1:8000/?demo and press reset, or call `POST /api/demo/reset`. This also clears the saved state
+(`data/state.json`). The AI answer cache is `data/llm_cache.json`; delete it to force fresh answers.
 
 ## 📝 Notes
 

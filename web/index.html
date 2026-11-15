@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Valio Aimo assistant</title>
-<link rel="stylesheet" href="/shared.css?v=5">
+<link rel="stylesheet" href="/shared.css?v=6">
 <style>
   /* Two columns inside the page: the work on the left, the order sheet (the cart) always in view on the right. */
   .shell { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; align-items: start; }
@@ -231,7 +231,7 @@ const PAIRS = [["FREE_FROM_GLUTEN", "AW", "claim"], ["FREE_FROM_EGGS", "AE", "al
 const SHOW_CLAIMS = 4, SHOW_ALLERGENS = 6;
 
 let buyers = [], last = null, itemIdx = 0, planIdx = 0, draft = [], quote = null, quoteTimer = null, quoteSeq = 0, editing = false, sent = null;
-const blankItem = () => ({ label: "", product_terms: [], quantity: null, unit: "L", must_claims: [], exclude_allergens: [],
+const blankItem = () => ({ label: "", product_terms: [], quantity: null, unit: "L", brand: null, pack_size: null, must_claims: [], exclude_allergens: [],
   strict_allergens: false, preferred_labels: [], substitutes: [] });
 const blankNeed = () => ({ items: [blankItem()], deliver_by: null, budget_eur: null, priorities: ["price"], other_wishes: [], language: "en" });
 let crit = blankNeed(), ci = 0, more = false, fillInfo = "";
@@ -317,8 +317,14 @@ function choicesHtml() {
   const what = esc(it.label || "this product");
   // Say plainly which product these boxes belong to: with several products, each has its own ticks.
   const many = crit.items.length > 1;
+  // A brand or pack size the buyer named: kept as a requirement (other brands and sizes count as close variants).
+  const drop = (field, text) => `<span class="pill named">${text}<button class="ghost small" aria-label="Remove ${field === "brand" ? "brand" : "pack size"}"
+      onclick="cur().${field} = null; renderCriteria(); markStale()"><i class="i i-x" aria-hidden="true"></i></button></span>`;
+  const named = (it.brand ? drop("brand", "Brand: " + esc(it.brand)) : "") +
+    (it.pack_size ? drop("pack_size", `Pack size: ${num(it.pack_size)} ${it.unit === "KG" ? "kg" : "l"}`) : "");
   const forWhat = `<div class="forwhat">Choices for <b>${esc(cap(it.label || "Product " + (ci + 1)))}</b>${many
-    ? `<span class="faint"> · product ${ci + 1} of ${crit.items.length}. Ticks here apply to this product only.</span>` : ""}</div>`;
+    ? `<span class="faint"> · product ${ci + 1} of ${crit.items.length}. Ticks here apply to this product only.</span>` : ""}
+    ${named ? `<div class="row" style="margin-top:8px">${named}<span class="faint">Other brands or sizes are offered only as close variants, and need approval.</span></div>` : ""}</div>`;
   const head = forWhat + (L.live ? `<div class="note">Choices that fit the ${L.total}${L.total >= 200 ? "+" : ""} products matching “${what}”. The number shows how many products have it.</div>`
     : `<div class="note">Type the product to see only the choices that fit it.</div>`);
   const everywhere = L.everywhere.filter(a => !it.exclude_allergens.includes(a));
@@ -383,7 +389,8 @@ function sheetHtml() {
   const items = crit.items.filter(it => (it.label || "").trim());
   let h = `<h2><i class="i i-cart" aria-hidden="true"></i>Order sheet</h2><div class="faint">${b ? esc(b.buyer) : "&nbsp;"}</div><hr class="rule">`;
   if (!items.length) return h + `<div class="sheet-empty"><i class="i i-cart" aria-hidden="true"></i><b>Your order sheet is empty</b><span>Say what your kitchen needs to get started. The total and who must approve it show up here.</span></div>`;
-  h += items.map(it => `<div class="kv"><span class="v">${esc(cap(it.label))}</span><span class="num">${it.quantity ? num(it.quantity) + " " + UNIT_NAME[it.unit] : "Amount not set"}</span></div>`).join("")
+  h += items.map(it => `<div class="kv"><span class="v">${esc(cap(it.label))}${it.brand || it.pack_size ? `<span class="faint" style="display:block;font-weight:400">${[it.brand ? esc(it.brand) : "",
+      it.pack_size ? `${num(it.pack_size)} ${it.unit === "KG" ? "kg" : "l"} packs` : ""].filter(Boolean).join(", ")}</span>` : ""}</span><span class="num">${it.quantity ? num(it.quantity) + " " + UNIT_NAME[it.unit] : "Amount not set"}</span></div>`).join("")
     + `<div class="kv"><span class="k">Deliver by</span><span>${crit.deliver_by ? dateText(crit.deliver_by) : "Not set"}</span></div>`
     + `<div class="kv"><span class="k">Budget</span><span class="num">${crit.budget_eur ? eur(crit.budget_eur) : "No limit"}</span></div>`;
   if (!last || !draft.length) return h + `<hr class="rule"><p class="muted">${last ? "No way to get this yet. Change the boxes and press Find." : "Press Find to see the ways to get it."}</p>`;
@@ -399,7 +406,7 @@ function sheetHtml() {
 function setLabel(v) {
   const it = cur(); v = v.trim();
   const changed = v.toLowerCase() !== (it.label || "").toLowerCase();
-  if (changed) { it.product_terms = v.split(/,| or /).map(s => s.trim()).filter(Boolean); it.substitutes = []; }
+  if (changed) { it.product_terms = v.split(/,| or /).map(s => s.trim()).filter(Boolean); it.substitutes = []; it.brand = null; it.pack_size = null; }
   it.label = v; $("c_err").textContent = "";
   if (changed) checkUnit();
 }
@@ -577,8 +584,8 @@ function plansHtml(r) {
     <div class="card plan ${j === planIdx ? "sel" : ""}" role="button" tabindex="0" onclick="selectPlan(${j})" onkeydown="if (event.key === 'Enter') selectPlan(${j})">
       ${planBand(p)}<div class="body">
       <div class="top"><span class="label">${esc(p.label)}</span><span class="price">${eur(p.total_eur)}</span></div>
-      ${p.highest_rated ? `<button class="pill badge-top ${explain && explain.j === j && explain.k === "_top" ? "accent" : "ok"}"
-          onclick="event.stopPropagation(); toggleExplain(${j}, '_top')" title="Why?">★ Highest rated <i class="i i-info" aria-hidden="true"></i></button>` : ""}
+      ${p.highest_rated ? `<button class="pill badge-top ${explain && explain.j === j && explain.k === "_top" ? "accent" : j === 0 ? "ok" : "warn"}"
+          onclick="event.stopPropagation(); toggleExplain(${j}, '_top')" title="Why?">${j === 0 ? "★ " : ""}${esc(p.highest_rated_label || "Highest rated")} <i class="i i-info" aria-hidden="true"></i></button>` : ""}
       <div class="what">${planWhat(p)}</div>
       ${planNote(p)}
       ${p.over_budget ? `<div class="faint" style="color:var(--bad);margin-top:4px">Over your budget</div>` : ""}
@@ -765,10 +772,10 @@ function demoStats() {
   const r = res(), f = r.funnel;
   $("demoOut").innerHTML = `<div class="funnel">${[`${f.catalog.toLocaleString("en")} products`, ...f.steps.map(s => `${s.remaining} ${esc(s.step)}`),
     `${f.judged} judged by AI`, `${f.checked_live} checked live`].map(s => `<span>${s}</span>`).join(" → ")}</div>
-    <div>Understood by ${esc(last.need.engine)} · ${last.ai_usage.calls} AI call(s), $${last.ai_usage.usd} · ${last.api.calls} Valio API call(s) for ${last.api.products_checked} products
+    <div>Understood by ${esc(last.need.engine)} · ${last.ai_usage.calls} AI call(s), $${last.ai_usage.usd}${last.ai_usage.cached_answers ? ` · ${last.ai_usage.cached_answers} answer(s) reused: same question as before, so the same answer` : ""} · ${last.api.calls} Valio API call(s) for ${last.api.products_checked} products
     ${f.substitutes_note ? "<br>" + esc(f.substitutes_note) : ""}
     <br>Valio's own substitution list: ${f.valio_substitutes_added} added${f.valio_substitutes_dropped ? `, ${f.valio_substitutes_dropped} left out (don't meet your requirements)` : ""}</div>
-    <div>Plan scores: ${r.plans.map(p => `${esc(p.label)} ${p.score} (certainty ${p.certainty}, match ${p.fidelity})`).join(" · ")}</div>`;
+    <div>Plan scores (0.40 × certainty + 0.35 × match + 0.25 × your criteria): ${r.plans.map(p => `${esc(p.label)} ${p.score} (certainty ${p.certainty}, match ${p.fidelity}, criteria ${p.rating ?? 0})`).join(" · ")}</div>`;
 }
 
 $("fill").onclick = () => fill();

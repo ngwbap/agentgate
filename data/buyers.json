@@ -4,6 +4,7 @@
       "id": "hotel-aurora",
       "name": "Hotel Aurora Helsinki (kitchen)",
       "approver": "Kitchen manager",
+      "approver_key": "demo-approver-aurora",
       "customer_number": "100200",
       "agents": [
         {"id": "valio-assistant", "name": "Valio Aimo assistant", "key": "demo-assistant-aurora", "paused": false},
@@ -32,6 +33,7 @@
       "id": "cafe-lumi",
       "name": "Cafe Lumi",
       "approver": "Owner",
+      "approver_key": "demo-approver-lumi",
       "customer_number": "100300",
       "agents": [
         {"id": "valio-assistant", "name": "Valio Aimo assistant", "key": "demo-assistant-lumi", "paused": false},

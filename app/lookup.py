@@ -10,12 +10,14 @@ Pipeline (each step is shown to the user):
  4. rank        - transparent rules: can it arrive in time and in full, then price per unit,
                   delivery reliability and CO2, with the buyer's priorities as weights
  5. plans       - good-better-best: up to three ways to fulfil the need, scored
-                  0.55 x delivery certainty + 0.45 x match fidelity, price as tie-breaker
+                  0.40 x delivery certainty + 0.35 x match fidelity + 0.25 x the buyer's own criteria
+                  (price by default), so "Best" is one ranking the buyer can read off the screen
 Every option carries its evidence: where each fact came from and how fresh it is.
 """
 from __future__ import annotations
 
 import math
+import re
 from datetime import date, datetime, timedelta
 
 from . import understand as und
@@ -23,9 +25,10 @@ from .catalog import ALLERGENS, CLAIM_NAMES, LABEL_NAMES, allergen_evidence, cla
 from .valio_api import ValioApiError, client as default_valio
 
 SHORTLIST_SEARCH = 40      # offline candidates considered
+NAMED_SEARCH = 200         # wider offline search when the buyer names a brand or pack size, so those are found
 SHORTLIST_JUDGE = 20       # sent to Claude for the relevance check (enough for 2 per common pack size)
 SUBSTITUTE_PER_IDEA = 4    # candidates per substitute idea sent to the same relevance check
-LIVE_EXACT = 10            # exact matches checked live
+LIVE_EXACT = 16            # exact matches checked live (one call each for availability and price, whatever the count)
 LIVE_CLOSE = 5             # close variants checked live
 LIVE_SUBSTITUTE = 4        # substitutes checked live, and only when needed
 VALIO_SUBS_MAX = 6         # extra products added because Valio itself lists them as substitutes
@@ -34,8 +37,9 @@ TERMINAL_UNKNOWN = 999999  # Valio's marker for "supplier stock, quantity unknow
 CRITERIA = {"price": "price", "reliability": "reliability", "low_co2": "co2"}   # buyer's choice -> score part
 CRITERION_NAMES = {"price": "Price", "reliability": "Reliability", "co2": "Carbon footprint"}
 
-# Good-better-best plan scoring (shown in the UI).
-W_CERTAINTY, W_FIDELITY = 0.55, 0.45
+# Good-better-best plan scoring (shown in the UI). One ranking: how sure the delivery is, how close the product
+# is to what was asked, and how well it does on what the buyer said matters (price unless they chose otherwise).
+W_CERTAINTY, W_FIDELITY, W_RATING = 0.40, 0.35, 0.25
 CERT_VALIO_STOCK = 1.0     # Valio's own stock, on time, cutoff still open
 CERT_SUPPLIER = 0.6        # supplier ("Terminal") stock, on time, cutoff still open
 CERT_CUTOFF_PASSED = 0.25  # order cutoff already passed: the date is at risk
@@ -51,6 +55,36 @@ def _pack_fit(p: dict, quantity: float) -> float:
         return 0.0
     units = quantity / size
     return -abs(math.log10(max(units, 1) / 20))   # ~20-200 sales units is the sweet spot
+
+
+_SIZE = re.compile(r"(\d+(?:[.,]\d+)?)\s?(ml|cl|dl|l|ltr|g|kg)\b", re.I)
+_SIZE_UNITS = {"ml": ("L", 0.001), "cl": ("L", 0.01), "dl": ("L", 0.1), "l": ("L", 1.0), "ltr": ("L", 1.0),
+               "g": ("KG", 0.001), "kg": ("KG", 1.0)}
+
+
+def _name_sizes(p: dict, unit: str) -> list[float]:
+    """Pack sizes written in a product's name ("milk drink 1 l", "100x2 cl"), in litres or kg."""
+    sizes = []
+    for text in (p.get("name") or "", p.get("name_fi") or ""):
+        for number, u in _SIZE.findall(text):
+            base, factor = _SIZE_UNITS[u.lower()]
+            if base == unit:
+                sizes.append(round(float(number.replace(",", ".")) * factor, 4))
+    return sizes
+
+
+def named_mismatch(item: dict, p: dict) -> str | None:
+    """A buyer who names a brand or a pack size means it. Says why this product is not that, or None if it is.
+    A plain rule on Valio's product data, not an AI opinion."""
+    brand = (item.get("brand") or "").strip()
+    if brand and brand.lower() not in f"{p.get('brand') or ''} {p.get('name') or ''} {p.get('name_fi') or ''}".lower():
+        return f"another brand, not {brand}"
+    want = item.get("pack_size")
+    if want and item.get("unit") in ("L", "KG"):
+        sizes = _name_sizes(p, item["unit"])
+        if sizes and not any(abs(size - want) <= 0.05 * want for size in sizes):
+            return f"{sizes[0]:g} {item['unit'].lower()} pack, not {want:g} {item['unit'].lower()}"
+    return None
 
 
 def _shortlist(candidates: list[dict], quantity: float, n: int) -> list[dict]:
@@ -471,7 +505,7 @@ def _make_plan(kind: str, lines: list[dict], item: dict) -> dict:
         "covered": covered, "content_unit": unit, "total_eur": total,
         "price_per_unit": round(total / covered, 3) if covered else None,
         "certainty": round(certainty, 3), "fidelity": round(fidelity, 3),
-        "score": round(W_CERTAINTY * certainty + W_FIDELITY * fidelity, 3),
+        "score": round(W_CERTAINTY * certainty + W_FIDELITY * fidelity + W_RATING * rating, 3),
         "trade_offs": trade_offs, "approval_needed": approval,
         "is_substitute": any(l["match"] != "exact" for l in lines), "why": why,
         "ratings": ratings, "rating": rating, "rating_stars": stars(rating) if ratings else None, "criteria": criteria,
@@ -488,7 +522,7 @@ def build_plans(options: list[dict], item: dict) -> list[dict]:
     """Good-better-best: up to three distinct ways to fulfil the need, best first.
 
     Hard requirements (claims, allergens) were already applied to every option, substitutes included,
-    so no plan ever trades them away. Plans only trade certainty against fidelity, then price.
+    so no plan ever trades them away. Plans trade certainty, fidelity and the buyer's own criteria (price by default).
     """
     usable = [o for o in options if _usable(o, item)]
     per_unit = lambda o: o["unit_price_eur"] / _size(o, item)
@@ -573,7 +607,7 @@ def mark_highest_rated(plans: list[dict]) -> list[dict]:
     """Badge the plan with the most stars on the buyer's criteria, with the reason in plain words:
     why it has more stars, and (if it isn't Best) why it is still ranked below Best."""
     for p in plans:
-        p["highest_rated"], p["highest_rated_why"] = False, None
+        p["highest_rated"], p["highest_rated_why"], p["highest_rated_label"] = False, None, None
     rated = [p for p in plans if p.get("ratings")]
     if len(rated) < 2:
         return plans
@@ -586,6 +620,7 @@ def mark_highest_rated(plans: list[dict]) -> list[dict]:
         return ", ".join(f"{p['ratings'][k]['name']} {p['ratings'][k]['stars']:.1f}★" for k in crit)
 
     top["highest_rated"] = True
+    top["highest_rated_label"] = "Highest rated"
     if top is best:
         top["highest_rated_why"] = (f"{best['label']} is also the highest rated on what matters to you: "
                                     f"{best['rating_stars']:.1f}★ overall ({stars_list(best)}). It is ranked first "
@@ -602,6 +637,11 @@ def mark_highest_rated(plans: list[dict]) -> list[dict]:
         lower.append(f"it is less close to what you asked ({top['fidelity']:.0%} match, against {best['fidelity']:.0%})")
     if top.get("over_budget") and not best.get("over_budget"):
         lower.append("it is over your budget")
+    # On a plan that is not Best the badge says the catch in the same breath, so the two never contradict.
+    top["highest_rated_label"] = "More stars, but " + (
+        "less certain" if top["certainty"] < best["certainty"] - 1e-9 else
+        "not exactly what you asked" if top["fidelity"] < best["fidelity"] - 1e-9 else
+        "over your budget" if top.get("over_budget") and not best.get("over_budget") else "costs more")
     risk = next((t for t in top["trade_offs"] if "supplier" in t or "cutoff" in t or "variant" in t or "substitute" in t), None)
     top["highest_rated_why"] = (
         f"{top['label']} has the most stars on what matters to you: {top['rating_stars']:.1f}★ against "
@@ -631,6 +671,8 @@ def normalise_need(need: dict, today: date) -> dict:
             "label": label or terms[0], "product_terms": terms, "quantity": qty if amount_given else 1.0,
             "unit": (it.get("unit") if it.get("unit") in und.UNITS else "PCS") if amount_given else "PCS",
             "amount_given": amount_given,
+            "brand": str(it.get("brand") or "").strip()[:40] or None,
+            "pack_size": float(it["pack_size"]) if isinstance(it.get("pack_size"), (int, float)) and it["pack_size"] > 0 else None,
             "must_claims": [c for c in it.get("must_claims") or [] if c in CLAIM_NAMES],
             "exclude_allergens": [a for a in it.get("exclude_allergens") or [] if a in ALLERGENS],
             "strict_allergens": bool(it.get("strict_allergens")),
@@ -640,6 +682,19 @@ def normalise_need(need: dict, today: date) -> dict:
     if not out["items"]:
         raise ValueError("Say which product you need.")
     return out
+
+
+def _no_plan(s: dict) -> dict:
+    """No plan at all: say which of the three reasons it is, so the buyer knows what to change."""
+    item, plan = s["item"], dict(NO_PLAN)
+    if not s["found"]["candidates"]:
+        strict = " that meets your requirements" if item["must_claims"] or item["exclude_allergens"] else ""
+        plan["why"] = (f"Valio's catalog has no product matching “{item['label']}”{strict}. "
+                       f"Check the name, loosen a requirement, or ask for another product.")
+    elif not s["options"]:
+        plan["why"] = (f"Valio has products with a similar name, but none of them is really “{item['label']}”. "
+                       f"Ask for another product, or use a more common name for it.")
+    return plan
 
 
 def has_confirmed_exact(plans: list[dict]) -> bool:
@@ -679,6 +734,9 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
     calls_before = dict(valio.stats)
     need = normalise_need(need, today) if need else und.understand(request, today)
     deliver_by = need.get("deliver_by") or (today + timedelta(days=2)).isoformat()
+    if deliver_by < today.isoformat():          # say so before any search or live call
+        raise ValueError(f"The delivery date {date.fromisoformat(deliver_by).strftime('%a %d %b %Y')} has already passed. "
+                         f"Choose today or a later date.")
     budget = need.get("budget_eur") or None
     assumptions = []
     if not need.get("deliver_by"):
@@ -694,8 +752,17 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
     shortlists = []
     for item in need["items"]:
         qty = float(item["quantity"])
-        found = _search(catalog, item["product_terms"], item, SHORTLIST_SEARCH)
-        cands = _shortlist(found["candidates"], qty, SHORTLIST_JUDGE)
+        names_something = bool(item.get("brand") or item.get("pack_size"))
+        found = _search(catalog, item["product_terms"], item, NAMED_SEARCH if names_something else SHORTLIST_SEARCH)
+        # A named brand or pack size goes to the front of the shortlist; the rest fill the remaining places
+        # so there is still something to offer (as a close variant) if the named one can't be delivered.
+        named = [c for c in found["candidates"] if not named_mismatch(item, c)] if names_something else []
+        if named:
+            named_ids = {c["id"] for c in named}
+            cands = _shortlist(named, qty, SHORTLIST_JUDGE)
+            cands += _shortlist([c for c in found["candidates"] if c["id"] not in named_ids], qty, SHORTLIST_JUDGE - len(cands))
+        else:
+            cands = _shortlist(found["candidates"][:SHORTLIST_SEARCH], qty, SHORTLIST_JUDGE)
         # Valio's own substitution rules for the products found: add the replacements Valio lists,
         # but only those that meet the same hard rules (claims, allergens, unit). Judged in the same AI call.
         valio_for: dict[str, list[str]] = {}
@@ -726,9 +793,15 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
         if rel_usage:
             usage.append(rel_usage)
         everything = cands + [s["product"] for s in sub_cands]
+        if names_something:                     # another brand or size is never "exactly what was asked"
+            for c in everything:
+                why = named_mismatch(item, c)
+                if why and relevance.get(c["id"], {}).get("match") == "exact":
+                    relevance[c["id"]] = {"match": "close", "reason": why}
         match_of = lambda c: relevance.get(c["id"], {}).get("match")
         shortlists.append({
             "item": item, "found": found, "relevance": relevance, "ideas": ideas, "valio_for": valio_for,
+            "named": {"brand": item.get("brand"), "pack_size": item.get("pack_size"), "matching": len(named)} if names_something else None,
             "valio_added": len(valio_added[:VALIO_SUBS_MAX]), "valio_dropped": valio_dropped,
             "live": [c for c in everything if match_of(c) == "exact"][:LIVE_EXACT]
                     + [c for c in everything if match_of(c) == "close"][:LIVE_CLOSE],
@@ -779,8 +852,8 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
         plans = mark_highest_rated(apply_budget(s["plans"], budget))
         results.append({
             "item": s["item"], "options": s["options"], "badges": badges(s["options"]),
-            "plans": plans, "plan": plans[0] if plans else dict(NO_PLAN),
-            "funnel": {"catalog": s["found"]["catalog_size"], "steps": s["found"]["steps"],
+            "plans": plans, "plan": plans[0] if plans else _no_plan(s),
+            "funnel": {"catalog": s["found"]["catalog_size"], "steps": s["found"]["steps"], "named": s["named"],
                        "judged": len(s["relevance"]), "checked_live": len(s["live"]) + s["sub_checked"],
                        "valio_substitutes_added": s["valio_added"], "valio_substitutes_dropped": s["valio_dropped"],
                        "substitute_ideas": s["ideas"], "substitutes_found": len(s["substitutes"]),
@@ -792,11 +865,14 @@ def lookup(request: str, *, today: date | None = None, catalog=None, valio=None,
         "request": request, "need": {k: v for k, v in need.items() if k not in ("usage",)}, "deliver_by": deliver_by,
         "budget_eur": budget, "assumptions": assumptions,
         "results": results, "live_error": live_error,
-        "plan_scoring": {"certainty_weight": W_CERTAINTY, "fidelity_weight": W_FIDELITY,
+        "plan_scoring": {"certainty_weight": W_CERTAINTY, "fidelity_weight": W_FIDELITY, "criteria_weight": W_RATING,
+                         "criteria": [CRITERION_NAMES[k] for k, v in _weights(priorities).items() if v],
                          "certainty": {"Valio stock": CERT_VALIO_STOCK, "supplier stock": CERT_SUPPLIER,
                                        "cutoff passed": CERT_CUTOFF_PASSED, "not covered": 0.0},
-                         "fidelity": FIDELITY, "tie_breaker": "total price"},
+                         "fidelity": FIDELITY, "tie_breaker": "total price",
+                         "formula": "score = 0.40 x certainty + 0.35 x fidelity + 0.25 x your criteria (0 to 1)"},
         "api": {"calls": calls, "products_checked": len(ids), "catalog_size": len(catalog)},
-        "ai_usage": {"calls": len(usage), "usd": round(sum(u["usd"] for u in usage), 4),
-                     "models": sorted({u["model"] for u in usage})},
+        "ai_usage": {"calls": len([u for u in usage if not u.get("cached")]),
+                     "cached_answers": len([u for u in usage if u.get("cached")]),     # same question as before: reused
+                     "usd": round(sum(u["usd"] for u in usage), 4), "models": sorted({u["model"] for u in usage})},
     }

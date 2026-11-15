@@ -285,7 +285,9 @@ class Catalog:
             term_hits = sum(1 for t in product_terms if pid in self._match_term(t))
             return (-cat_score.get(p["category"], 0), -term_hits, p["reliability"] is None,
                     -(p["content_per_sales_unit"] or 0))
-        ranked = sorted(matched, key=rank)[:limit]
+        # Ties are broken by product id, so the same search always returns the same products in the same order
+        # (a set has no fixed order, and it changes with every server start).
+        ranked = sorted(matched, key=lambda pid: (rank(pid), pid))[:limit]
         return {"candidates": [self.products[pid] for pid in ranked], "steps": steps,
                 "catalog_size": len(self.products)}
 
